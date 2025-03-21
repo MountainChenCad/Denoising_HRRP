@@ -1,4 +1,4 @@
-# compare_methods.py
+# compare_methods.py (修改版，增加了AE和多PSNR比较，CVPR标准可视化)
 import torch
 import torch.nn as nn
 import numpy as np
@@ -8,327 +8,635 @@ import matplotlib.pyplot as plt
 from models import TargetRadialLengthModule, TargetIdentityModule
 from cgan_models import Generator
 from cae_models import ConvAutoEncoder
+from ae_models import AutoEncoder
 from hrrp_dataset import HRRPDataset
 from torch.utils.data import DataLoader
 from skimage.metrics import structural_similarity as ssim
+import math
+import matplotlib as mpl
+
+# 设置matplotlib参数以符合CVPR标准
+plt.rcParams['font.size'] = 10
+plt.rcParams['axes.linewidth'] = 1.5
+plt.rcParams['axes.labelsize'] = 12
+plt.rcParams['axes.titlesize'] = 14
+plt.rcParams['xtick.major.width'] = 1.5
+plt.rcParams['ytick.major.width'] = 1.5
+plt.rcParams['xtick.labelsize'] = 10
+plt.rcParams['ytick.labelsize'] = 10
+plt.rcParams['legend.fontsize'] = 10
+plt.rcParams['figure.titlesize'] = 16
+
+# 定义CVPR标准的配色方案
+CVPR_COLORS = {
+    'noisy': '#7F7F7F',  # 灰色
+    'cgan': '#1F77B4',  # 蓝色
+    'cae': '#2CA02C',  # 绿色
+    'ae': '#D62728',  # 红色
+}
 
 
-def add_noise(hrrp_data, noise_level=0.1):
+def add_noise_for_exact_psnr(signal, target_psnr_db, max_iterations=5, tolerance=0.1):
     """
-    Add Gaussian noise to HRRP data
+    添加高斯噪声以精确达到特定的PSNR(峰值信噪比)值
 
-    Parameters:
-        hrrp_data (torch.Tensor): Clean HRRP data
-        noise_level (float): Standard deviation of Gaussian noise
+    参数:
+        signal (torch.Tensor): 原始干净信号
+        target_psnr_db (float): 目标PSNR(dB)
+        max_iterations (int): 最大迭代调整次数
+        tolerance (float): 可接受的PSNR误差范围(dB)
 
-    Returns:
-        torch.Tensor: Noisy HRRP data
+    返回:
+        torch.Tensor: 添加噪声后的信号
+        float: 实际测得的PSNR
     """
-    noise = torch.randn_like(hrrp_data) * noise_level
-    noisy_data = hrrp_data + noise
-    # Ensure data stays in valid range [0, 1]
-    noisy_data = torch.clamp(noisy_data, 0, 1)
-    return noisy_data
+    # 初始估计
+    signal_power = torch.mean(signal ** 2)
+    noise_power = signal_power / (10 ** (target_psnr_db / 10))
+
+    best_noisy_signal = None
+    best_psnr_diff = float('inf')
+
+    for iteration in range(max_iterations):
+        # 生成高斯噪声
+        noise = torch.randn_like(signal) * torch.sqrt(noise_power)
+
+        # 添加噪声并裁剪
+        noisy_signal = signal + noise
+        noisy_signal = torch.clamp(noisy_signal, 0, 1)
+
+        # 计算实际PSNR
+        actual_psnr = calculate_psnr(signal, noisy_signal)
+        psnr_diff = abs(actual_psnr - target_psnr_db)
+
+        # 保存最佳结果
+        if psnr_diff < best_psnr_diff:
+            best_noisy_signal = noisy_signal.clone()
+            best_psnr_diff = psnr_diff
+
+        # 如果足够接近则退出
+        if psnr_diff <= tolerance:
+            return noisy_signal, actual_psnr
+
+        # 根据当前结果调整噪声功率
+        adjustment_factor = 10 ** ((actual_psnr - target_psnr_db) / 20)
+        noise_power = noise_power * adjustment_factor
+
+    # 返回最接近目标PSNR的结果
+    actual_psnr = calculate_psnr(signal, best_noisy_signal)
+    return best_noisy_signal, actual_psnr
 
 
 def calculate_ssim(x, y):
     """
-    Calculate SSIM between two 1D signals
+    计算两个1D信号之间的SSIM
 
-    Parameters:
-        x (numpy.ndarray): First signal (1D)
-        y (numpy.ndarray): Second signal (1D)
+    参数:
+        x (numpy.ndarray): 第一个信号 (1D)
+        y (numpy.ndarray): 第二个信号 (1D)
 
-    Returns:
-        float: SSIM value between 0 and 1 (higher is better)
+    返回:
+        float: SSIM值在0到1之间 (越高越好)
     """
-    # SSIM requires inputs to be non-negative
+    # SSIM要求输入为非负
     return ssim(x, y, data_range=1.0)
 
 
-def compare_methods(args):
+def calculate_psnr(original, noisy):
     """
-    Compare CGAN and CAE methods for HRRP signal denoising
+    计算PSNR
 
-    Parameters:
-        args: Comparison parameters
+    参数:
+        original (torch.Tensor): 原始干净信号
+        noisy (torch.Tensor): 噪声或恢复信号
+
+    返回:
+        float: PSNR值(dB)
     """
-    # Set device
+    mse = torch.mean((original - noisy) ** 2)
+    if mse == 0:
+        return 100
+    max_pixel = 1.0
+    psnr = 20 * torch.log10(max_pixel / torch.sqrt(mse))
+    return psnr.item()
+
+
+def compare_methods(args, psnr_level):
+    """
+    比较CGAN、CAE和AE方法用于HRRP信号去噪，在特定PSNR级别下
+
+    参数:
+        args: 比较参数
+        psnr_level: 当前测试的PSNR级别(dB)
+    """
+    # 创建特定PSNR级别的输出目录
+    output_dir = os.path.join(args.output_dir, f"psnr_{psnr_level}dB")
+    os.makedirs(output_dir, exist_ok=True)
+
+    # 设置设备
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    print(f"使用设备: {device} 进行 PSNR = {psnr_level}dB 的比较")
 
-    # Load CGAN models
-    # Feature extractors
+    # 加载CGAN模型
+    # 特征提取器
     G_D = TargetRadialLengthModule(input_dim=args.input_dim, feature_dim=args.feature_dim).to(device)
     G_I = TargetIdentityModule(input_dim=args.input_dim, feature_dim=args.feature_dim,
                                num_classes=args.num_classes).to(device)
 
-    # Load their weights
+    # 加载其权重
     G_D.load_state_dict(torch.load(os.path.join(args.cgan_dir, 'G_D_final.pth')))
     G_I.load_state_dict(torch.load(os.path.join(args.cgan_dir, 'G_I_final.pth')))
 
-    # Set feature extractors to evaluation mode
+    # 将特征提取器设置为评估模式
     G_D.eval()
     G_I.eval()
 
-    # Load the CGAN generator
+    # 加载CGAN生成器
     cgan_generator = Generator(input_dim=args.input_dim,
                                condition_dim=args.feature_dim * 2,
                                hidden_dim=args.hidden_dim).to(device)
 
-    # Load generator weights
+    # 加载生成器权重
     cgan_generator.load_state_dict(torch.load(os.path.join(args.cgan_dir, 'generator_final.pth')))
     cgan_generator.eval()
 
-    # Load CAE model
+    # 加载CAE模型
     cae_model = ConvAutoEncoder(input_dim=args.input_dim,
                                 latent_dim=args.latent_dim,
                                 hidden_dim=args.hidden_dim).to(device)
 
-    # Load CAE weights
+    # 加载CAE权重
     cae_model.load_state_dict(torch.load(os.path.join(args.cae_dir, 'cae_model_final.pth')))
     cae_model.eval()
 
-    # Load test dataset
+    # 加载AE模型
+    ae_model = AutoEncoder(input_dim=args.input_dim,
+                           latent_dim=args.latent_dim,
+                           hidden_dim=args.ae_hidden_dim).to(device)
+
+    # 加载AE权重
+    ae_model.load_state_dict(torch.load(os.path.join(args.ae_dir, 'ae_model_final.pth')))
+    ae_model.eval()
+
+    # 加载测试数据集
     test_dataset = HRRPDataset(args.test_dir)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
-    # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
+    # 创建输出目录
+    os.makedirs(output_dir, exist_ok=True)
 
-    # Define loss function for evaluation
+    # 定义用于评估的损失函数
     mse_loss = nn.MSELoss()
 
-    # Compare denoising performance
+    # 比较去噪性能
     cgan_total_mse = 0
     cae_total_mse = 0
+    ae_total_mse = 0
     cgan_total_ssim = 0
     cae_total_ssim = 0
+    ae_total_ssim = 0
+    cgan_total_psnr = 0
+    cae_total_psnr = 0
+    ae_total_psnr = 0
+    noisy_total_psnr = 0
 
     with torch.no_grad():
         for i, (clean_data, radial_length, identity_label) in enumerate(test_loader):
             if i >= args.num_samples:
                 break
 
-            # Move data to device
+            # 将数据移至设备
             clean_data = clean_data.float().to(device)
 
-            # Create noisy data
-            noisy_data = add_noise(clean_data, noise_level=args.noise_level)
+            # 创建噪声数据，基于指定的PSNR级别
+            noisy_data, actual_psnr = add_noise_for_exact_psnr(clean_data, psnr_level)
+            print(f"  样本 {i + 1} - 目标PSNR: {psnr_level}dB, 实际PSNR: {actual_psnr:.2f}dB")
 
-            # Extract features for CGAN conditioning
+            # 提取CGAN条件特征
             f_D, _ = G_D(clean_data)
             f_I, _ = G_I(clean_data)
             condition = torch.cat([f_D, f_I], dim=1)
 
-            # Generate denoised data using CGAN
+            # 使用CGAN生成去噪数据
             cgan_denoised = cgan_generator(noisy_data, condition)
 
-            # Generate denoised data using CAE
+            # 使用CAE生成去噪数据
             cae_denoised, _ = cae_model(noisy_data)
 
-            # Calculate MSE for both methods
+            # 使用AE生成去噪数据
+            ae_denoised, _ = ae_model(noisy_data)
+
+            # 计算所有方法的MSE
             cgan_mse = mse_loss(cgan_denoised, clean_data).item()
             cae_mse = mse_loss(cae_denoised, clean_data).item()
+            ae_mse = mse_loss(ae_denoised, clean_data).item()
 
-            # Calculate SSIM for both methods
+            # 计算所有方法的PSNR
+            noisy_psnr = calculate_psnr(clean_data, noisy_data)
+            cgan_psnr = calculate_psnr(clean_data, cgan_denoised)
+            cae_psnr = calculate_psnr(clean_data, cae_denoised)
+            ae_psnr = calculate_psnr(clean_data, ae_denoised)
+
+            # 计算所有方法的SSIM
             clean_np = clean_data.cpu().numpy()[0]
+            noisy_np = noisy_data.cpu().numpy()[0]
             cgan_np = cgan_denoised.cpu().numpy()[0]
             cae_np = cae_denoised.cpu().numpy()[0]
+            ae_np = ae_denoised.cpu().numpy()[0]
 
             cgan_ssim = calculate_ssim(clean_np, cgan_np)
             cae_ssim = calculate_ssim(clean_np, cae_np)
+            ae_ssim = calculate_ssim(clean_np, ae_np)
 
-            # Accumulate metrics
+            # 累积指标
             cgan_total_mse += cgan_mse
             cae_total_mse += cae_mse
+            ae_total_mse += ae_mse
             cgan_total_ssim += cgan_ssim
             cae_total_ssim += cae_ssim
+            ae_total_ssim += ae_ssim
+            noisy_total_psnr += noisy_psnr
+            cgan_total_psnr += cgan_psnr
+            cae_total_psnr += cae_psnr
+            ae_total_psnr += ae_psnr
 
-            # Plot comparison results
-            plt.figure(figsize=(15, 4))
+            # 绘制比较结果 (CVPR风格)
+            fig, axs = plt.subplots(1, 5, figsize=(20, 4), constrained_layout=True)
 
-            plt.subplot(1, 4, 1)
-            plt.plot(clean_data.cpu().numpy()[0])
-            plt.title('Clean HRRP')
-            plt.xlabel('Range Bin')
-            plt.ylabel('Magnitude')
+            # 干净HRRP
+            axs[0].plot(clean_np, color='k', linewidth=1.5)
+            axs[0].set_title('Clean HRRP')
+            axs[0].set_xlabel('Range Bin')
+            axs[0].set_ylabel('Magnitude')
+            axs[0].grid(True, linestyle='--', alpha=0.3)
 
-            plt.subplot(1, 4, 2)
-            plt.plot(noisy_data.cpu().numpy()[0])
-            plt.title(f'Noisy HRRP')
-            plt.xlabel('Range Bin')
-            plt.ylabel('Magnitude')
+            # 噪声HRRP
+            axs[1].plot(noisy_np, color=CVPR_COLORS['noisy'], linewidth=1.5)
+            axs[1].set_title(f'Noisy HRRP\nPSNR: {noisy_psnr:.2f} dB')
+            axs[1].set_xlabel('Range Bin')
+            axs[1].set_ylabel('Magnitude')
+            axs[1].grid(True, linestyle='--', alpha=0.3)
 
-            plt.subplot(1, 4, 3)
-            plt.plot(cgan_denoised.cpu().numpy()[0])
-            plt.title(f'CGAN Denoised\nMSE: {cgan_mse:.4f}, SSIM: {cgan_ssim:.4f}')
-            plt.xlabel('Range Bin')
-            plt.ylabel('Magnitude')
+            # CGAN结果
+            axs[2].plot(cgan_np, color=CVPR_COLORS['cgan'], linewidth=1.5)
+            axs[2].set_title(f'CGAN Denoised\nPSNR: {cgan_psnr:.2f} dB, SSIM: {cgan_ssim:.4f}')
+            axs[2].set_xlabel('Range Bin')
+            axs[2].set_ylabel('Magnitude')
+            axs[2].grid(True, linestyle='--', alpha=0.3)
 
-            plt.subplot(1, 4, 4)
-            plt.plot(cae_denoised.cpu().numpy()[0])
-            plt.title(f'CAE Denoised\nMSE: {cae_mse:.4f}, SSIM: {cae_ssim:.4f}')
-            plt.xlabel('Range Bin')
-            plt.ylabel('Magnitude')
+            # CAE结果
+            axs[3].plot(cae_np, color=CVPR_COLORS['cae'], linewidth=1.5)
+            axs[3].set_title(f'CAE Denoised\nPSNR: {cae_psnr:.2f} dB, SSIM: {cae_ssim:.4f}')
+            axs[3].set_xlabel('Range Bin')
+            axs[3].set_ylabel('Magnitude')
+            axs[3].grid(True, linestyle='--', alpha=0.3)
 
-            plt.tight_layout()
-            plt.savefig(os.path.join(args.output_dir, f'comparison_sample_{i + 1}.png'))
-            plt.close()
+            # AE结果
+            axs[4].plot(ae_np, color=CVPR_COLORS['ae'], linewidth=1.5)
+            axs[4].set_title(f'AE Denoised\nPSNR: {ae_psnr:.2f} dB, SSIM: {ae_ssim:.4f}')
+            axs[4].set_xlabel('Range Bin')
+            axs[4].set_ylabel('Magnitude')
+            axs[4].grid(True, linestyle='--', alpha=0.3)
 
-            print(f"Sample {i + 1}:")
-            print(f"  CGAN - MSE: {cgan_mse:.4f}, SSIM: {cgan_ssim:.4f}")
-            print(f"  CAE  - MSE: {cae_mse:.4f}, SSIM: {cae_ssim:.4f}")
+            # 在图表标题中使用实际PSNR
+            fig.suptitle(f'HRRP Denoising Comparison (Target PSNR = {psnr_level}dB, Actual PSNR = {actual_psnr:.2f}dB)',
+                         fontsize=14)
+            plt.savefig(os.path.join(output_dir, f'comparison_sample_{i + 1}.png'), dpi=300, bbox_inches='tight')
+            plt.close(fig)
 
-            # Compare methods based on both metrics
-            if cgan_mse < cae_mse and cgan_ssim > cae_ssim:
-                better = "CGAN"
-                mse_diff = (cae_mse - cgan_mse) / cae_mse * 100
-                ssim_diff = (cgan_ssim - cae_ssim) / cae_ssim * 100
-                print(f"  Better method: {better} (MSE better by {mse_diff:.2f}%, SSIM better by {ssim_diff:.2f}%)")
-            elif cae_mse < cgan_mse and cae_ssim > cgan_ssim:
-                better = "CAE"
-                mse_diff = (cgan_mse - cae_mse) / cgan_mse * 100
-                ssim_diff = (cae_ssim - cgan_ssim) / cgan_ssim * 100
-                print(f"  Better method: {better} (MSE better by {mse_diff:.2f}%, SSIM better by {ssim_diff:.2f}%)")
-            else:
-                print("  Mixed results: One method better in MSE, the other better in SSIM")
-                if cgan_mse < cae_mse:
-                    mse_better = "CGAN"
-                    mse_diff = (cae_mse - cgan_mse) / cae_mse * 100
-                else:
-                    mse_better = "CAE"
-                    mse_diff = (cgan_mse - cae_mse) / cgan_mse * 100
+            print(f"PSNR={psnr_level}dB, 样本 {i + 1}:")
+            print(f"  噪声信号 - PSNR: {noisy_psnr:.2f}dB")
+            print(f"  CGAN - PSNR: {cgan_psnr:.2f}dB, SSIM: {cgan_ssim:.4f}")
+            print(f"  CAE  - PSNR: {cae_psnr:.2f}dB, SSIM: {cae_ssim:.4f}")
+            print(f"  AE   - PSNR: {ae_psnr:.2f}dB, SSIM: {ae_ssim:.4f}")
 
-                if cgan_ssim > cae_ssim:
-                    ssim_better = "CGAN"
-                    ssim_diff = (cgan_ssim - cae_ssim) / cae_ssim * 100
-                else:
-                    ssim_better = "CAE"
-                    ssim_diff = (cae_ssim - cgan_ssim) / cgan_ssim * 100
+            # 基于两个指标找出最佳方法
+            methods = ["CGAN", "CAE", "AE"]
+            psnr_values = [cgan_psnr, cae_psnr, ae_psnr]
+            ssim_values = [cgan_ssim, cae_ssim, ae_ssim]
 
-                print(f"    MSE: {mse_better} better by {mse_diff:.2f}%")
-                print(f"    SSIM: {ssim_better} better by {ssim_diff:.2f}%")
+            best_psnr_idx = np.argmax(psnr_values)
+            best_ssim_idx = np.argmax(ssim_values)
 
-    # Calculate average metrics
-    avg_cgan_mse = cgan_total_mse / min(args.num_samples, len(test_loader))
-    avg_cae_mse = cae_total_mse / min(args.num_samples, len(test_loader))
-    avg_cgan_ssim = cgan_total_ssim / min(args.num_samples, len(test_loader))
-    avg_cae_ssim = cae_total_ssim / min(args.num_samples, len(test_loader))
+            print(f"  最佳PSNR: {methods[best_psnr_idx]} ({psnr_values[best_psnr_idx]:.2f}dB)")
+            print(f"  最佳SSIM: {methods[best_ssim_idx]} ({ssim_values[best_ssim_idx]:.4f})")
+            print()
 
-    print(f"\nAverage Metrics:")
-    print(f"  CGAN - MSE: {avg_cgan_mse:.4f}, SSIM: {avg_cgan_ssim:.4f}")
-    print(f"  CAE  - MSE: {avg_cae_mse:.4f}, SSIM: {avg_cae_ssim:.4f}")
+    # 计算平均指标
+    n_samples = min(args.num_samples, len(test_loader))
+    avg_noisy_psnr = noisy_total_psnr / n_samples
+    avg_cgan_psnr = cgan_total_psnr / n_samples
+    avg_cae_psnr = cae_total_psnr / n_samples
+    avg_ae_psnr = ae_total_psnr / n_samples
 
-    # Determine overall better method based on both metrics
-    mse_winner = "CGAN" if avg_cgan_mse < avg_cae_mse else "CAE"
-    ssim_winner = "CGAN" if avg_cgan_ssim > avg_cae_ssim else "CAE"
+    avg_cgan_mse = cgan_total_mse / n_samples
+    avg_cae_mse = cae_total_mse / n_samples
+    avg_ae_mse = ae_total_mse / n_samples
 
-    if mse_winner == ssim_winner:
-        better_method = mse_winner
-        mse_improvement = abs((avg_cgan_mse - avg_cae_mse) / max(avg_cgan_mse, avg_cae_mse) * 100)
-        ssim_improvement = abs((avg_cgan_ssim - avg_cae_ssim) / max(avg_cgan_ssim, avg_cae_ssim) * 100)
-        print(f"Overall better method: {better_method}")
-        print(f"  MSE improvement: {mse_improvement:.2f}%")
-        print(f"  SSIM improvement: {ssim_improvement:.2f}%")
-    else:
-        print(f"Mixed overall results:")
-        print(
-            f"  MSE: {mse_winner} is better by {abs((avg_cgan_mse - avg_cae_mse) / max(avg_cgan_mse, avg_cae_mse) * 100):.2f}%")
-        print(
-            f"  SSIM: {ssim_winner} is better by {abs((avg_cgan_ssim - avg_cae_ssim) / max(avg_cgan_ssim, avg_cae_ssim) * 100):.2f}%")
+    avg_cgan_ssim = cgan_total_ssim / n_samples
+    avg_cae_ssim = cae_total_ssim / n_samples
+    avg_ae_ssim = ae_total_ssim / n_samples
 
-    # Save summary results
-    with open(os.path.join(args.output_dir, 'comparison_results.txt'), 'w') as f:
-        f.write(f"CGAN vs CAE Comparison Results\n")
-        f.write(f"============================\n\n")
-        f.write(f"Noise Level: {args.noise_level}\n")
-        f.write(f"Number of test samples: {min(args.num_samples, len(test_loader))}\n\n")
-        f.write(f"Average Metrics:\n")
-        f.write(f"  CGAN - MSE: {avg_cgan_mse:.4f}, SSIM: {avg_cgan_ssim:.4f}\n")
-        f.write(f"  CAE  - MSE: {avg_cae_mse:.4f}, SSIM: {avg_cae_ssim:.4f}\n\n")
+    print(f"\nPSNR={psnr_level}dB, 平均指标:")
+    print(f"  噪声信号 - PSNR: {avg_noisy_psnr:.2f}dB")
+    print(f"  CGAN - PSNR: {avg_cgan_psnr:.2f}dB, MSE: {avg_cgan_mse:.4f}, SSIM: {avg_cgan_ssim:.4f}")
+    print(f"  CAE  - PSNR: {avg_cae_psnr:.2f}dB, MSE: {avg_cae_mse:.4f}, SSIM: {avg_cae_ssim:.4f}")
+    print(f"  AE   - PSNR: {avg_ae_psnr:.2f}dB, MSE: {avg_ae_mse:.4f}, SSIM: {avg_ae_ssim:.4f}")
 
-        if mse_winner == ssim_winner:
-            mse_improvement = abs((avg_cgan_mse - avg_cae_mse) / max(avg_cgan_mse, avg_cae_mse) * 100)
-            ssim_improvement = abs((avg_cgan_ssim - avg_cae_ssim) / max(avg_cgan_ssim, avg_cae_ssim) * 100)
-            f.write(f"Overall better method: {mse_winner}\n")
-            f.write(f"  MSE improvement: {mse_improvement:.2f}%\n")
-            f.write(f"  SSIM improvement: {ssim_improvement:.2f}%\n")
-        else:
-            f.write(f"Mixed overall results:\n")
-            f.write(
-                f"  MSE: {mse_winner} is better by {abs((avg_cgan_mse - avg_cae_mse) / max(avg_cgan_mse, avg_cae_mse) * 100):.2f}%\n")
-            f.write(
-                f"  SSIM: {ssim_winner} is better by {abs((avg_cgan_ssim - avg_cae_ssim) / max(avg_cgan_ssim, avg_cae_ssim) * 100):.2f}%\n")
+    # 计算PSNR改善量
+    cgan_psnr_improvement = avg_cgan_psnr - avg_noisy_psnr
+    cae_psnr_improvement = avg_cae_psnr - avg_noisy_psnr
+    ae_psnr_improvement = avg_ae_psnr - avg_noisy_psnr
 
-    # Create bar charts comparing methods
-    plt.figure(figsize=(12, 10))
+    print(f"\nPSNR改善量:")
+    print(f"  CGAN: +{cgan_psnr_improvement:.2f}dB")
+    print(f"  CAE: +{cae_psnr_improvement:.2f}dB")
+    print(f"  AE: +{ae_psnr_improvement:.2f}dB")
 
-    # MSE comparison (lower is better)
-    plt.subplot(2, 1, 1)
-    methods = ['CGAN', 'CAE']
-    mse_values = [avg_cgan_mse, avg_cae_mse]
-    bars = plt.bar(methods, mse_values, color=['blue', 'green'])
-    plt.title('MSE Comparison (lower is better)')
-    plt.xlabel('Method')
-    plt.ylabel('Average MSE')
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    # 找出总体最佳方法
+    methods = ["CGAN", "CAE", "AE"]
+    avg_psnr_values = [avg_cgan_psnr, avg_cae_psnr, avg_ae_psnr]
+    avg_ssim_values = [avg_cgan_ssim, avg_cae_ssim, avg_ae_ssim]
 
-    # Add text labels above bars
+    best_psnr_idx = np.argmax(avg_psnr_values)
+    best_ssim_idx = np.argmax(avg_ssim_values)
+
+    print(f"\n按PSNR最佳方法: {methods[best_psnr_idx]} ({avg_psnr_values[best_psnr_idx]:.2f}dB)")
+    print(f"按SSIM最佳方法: {methods[best_ssim_idx]} ({avg_ssim_values[best_ssim_idx]:.4f})")
+
+    # 保存摘要结果
+    with open(os.path.join(output_dir, 'comparison_results.txt'), 'w') as f:
+        f.write(f"CGAN vs CAE vs AE 在PSNR={psnr_level}dB条件下的比较结果\n")
+        f.write(f"=======================================================\n\n")
+        f.write(f"测试样本数: {n_samples}\n\n")
+        f.write(f"平均指标:\n")
+        f.write(f"  噪声信号 - PSNR: {avg_noisy_psnr:.2f}dB\n")
+        f.write(f"  CGAN - PSNR: {avg_cgan_psnr:.2f}dB, MSE: {avg_cgan_mse:.4f}, SSIM: {avg_cgan_ssim:.4f}\n")
+        f.write(f"  CAE  - PSNR: {avg_cae_psnr:.2f}dB, MSE: {avg_cae_mse:.4f}, SSIM: {avg_cae_ssim:.4f}\n")
+        f.write(f"  AE   - PSNR: {avg_ae_psnr:.2f}dB, MSE: {avg_ae_mse:.4f}, SSIM: {avg_ae_ssim:.4f}\n\n")
+        f.write(f"PSNR改善量:\n")
+        f.write(f"  CGAN: +{cgan_psnr_improvement:.2f}dB\n")
+        f.write(f"  CAE: +{cae_psnr_improvement:.2f}dB\n")
+        f.write(f"  AE: +{ae_psnr_improvement:.2f}dB\n\n")
+        f.write(f"按PSNR最佳方法: {methods[best_psnr_idx]} ({avg_psnr_values[best_psnr_idx]:.2f}dB)\n")
+        f.write(f"按SSIM最佳方法: {methods[best_ssim_idx]} ({avg_ssim_values[best_ssim_idx]:.4f})\n")
+
+    # 创建比较方法的条形图 (CVPR风格)
+    fig = plt.figure(figsize=(15, 14), constrained_layout=True)
+    grid = plt.GridSpec(3, 1, figure=fig)
+
+    # PSNR比较(越高越好)
+    ax1 = fig.add_subplot(grid[0, 0])
+    methods = ['Noisy', 'CGAN', 'CAE', 'AE']
+    psnr_values = [avg_noisy_psnr, avg_cgan_psnr, avg_cae_psnr, avg_ae_psnr]
+    improvement_values = [0, cgan_psnr_improvement, cae_psnr_improvement, ae_psnr_improvement]
+
+    method_colors = [CVPR_COLORS['noisy'], CVPR_COLORS['cgan'], CVPR_COLORS['cae'], CVPR_COLORS['ae']]
+    bars = ax1.bar(methods, psnr_values, color=method_colors, width=0.6, edgecolor='k', linewidth=1)
+    ax1.set_title(f'PSNR Comparison at {psnr_level}dB Noise Level', pad=15)
+    ax1.set_xlabel('Methods')
+    ax1.set_ylabel('PSNR (dB)')
+    ax1.grid(axis='y', linestyle='--', alpha=0.3)
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['right'].set_visible(False)
+
+    # 在条形上方添加PSNR值和改善量
+    for i, bar in enumerate(bars):
+        height = bar.get_height()
+        if i == 0:  # 噪声信号，没有改善
+            ax1.text(bar.get_x() + bar.get_width() / 2., height + 0.5,
+                     f'{height:.2f}dB', ha='center', va='bottom')
+        else:  # 去噪方法，显示改善量
+            ax1.text(bar.get_x() + bar.get_width() / 2., height + 0.5,
+                     f'{height:.2f}dB\n(+{improvement_values[i]:.2f}dB)',
+                     ha='center', va='bottom')
+
+    # MSE比较(越低越好)
+    ax2 = fig.add_subplot(grid[1, 0])
+    methods = ['CGAN', 'CAE', 'AE']
+    mse_values = [avg_cgan_mse, avg_cae_mse, avg_ae_mse]
+    method_colors = [CVPR_COLORS['cgan'], CVPR_COLORS['cae'], CVPR_COLORS['ae']]
+    bars = ax2.bar(methods, mse_values, color=method_colors, width=0.6, edgecolor='k', linewidth=1)
+    ax2.set_title('MSE Comparison', pad=15)
+    ax2.set_xlabel('Methods')
+    ax2.set_ylabel('Mean Squared Error')
+    ax2.grid(axis='y', linestyle='--', alpha=0.3)
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+
+    # 在条形上方添加MSE值
     for bar in bars:
         height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width() / 2., height + 0.001,
+        ax2.text(bar.get_x() + bar.get_width() / 2., height + 0.0005,
                  f'{height:.4f}', ha='center', va='bottom')
 
-    # SSIM comparison (higher is better)
-    plt.subplot(2, 1, 2)
-    ssim_values = [avg_cgan_ssim, avg_cae_ssim]
-    bars = plt.bar(methods, ssim_values, color=['blue', 'green'])
-    plt.title('SSIM Comparison (higher is better)')
-    plt.xlabel('Method')
-    plt.ylabel('Average SSIM')
-    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    # SSIM比较(越高越好)
+    ax3 = fig.add_subplot(grid[2, 0])
+    methods = ['CGAN', 'CAE', 'AE']
+    ssim_values = [avg_cgan_ssim, avg_cae_ssim, avg_ae_ssim]
+    bars = ax3.bar(methods, ssim_values, color=method_colors, width=0.6, edgecolor='k', linewidth=1)
+    ax3.set_title('SSIM Comparison', pad=15)
+    ax3.set_xlabel('Methods')
+    ax3.set_ylabel('Structural Similarity Index')
+    ax3.grid(axis='y', linestyle='--', alpha=0.3)
+    ax3.spines['top'].set_visible(False)
+    ax3.spines['right'].set_visible(False)
 
-    # Add text labels above bars
+    # 设置SSIM轴的范围以突出差异
+    ssim_min = min(ssim_values) * 0.95
+    ax3.set_ylim([ssim_min, 1.0])
+
+    # 在条形上方添加SSIM值
     for bar in bars:
         height = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width() / 2., height + 0.001,
+        ax3.text(bar.get_x() + bar.get_width() / 2., height + 0.005,
                  f'{height:.4f}', ha='center', va='bottom')
 
-    plt.tight_layout()
-    plt.savefig(os.path.join(args.output_dir, 'method_comparison.png'))
-    plt.close()
+    plt.savefig(os.path.join(output_dir, 'method_comparison.png'), dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+    return avg_cgan_psnr, avg_cae_psnr, avg_ae_psnr, avg_cgan_ssim, avg_cae_ssim, avg_ae_ssim, cgan_psnr_improvement, cae_psnr_improvement, ae_psnr_improvement
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Compare CGAN and CAE for HRRP denoising')
+def main():
+    parser = argparse.ArgumentParser(description='比较CGAN, CAE和AE用于HRRP去噪')
     parser.add_argument('--test_dir', type=str, default='datasets/simulated_3/test',
-                        help='Directory containing test data')
+                        help='包含测试数据的目录')
     parser.add_argument('--cgan_dir', type=str, default='checkpoints/cgan',
-                        help='Directory containing trained CGAN models')
+                        help='包含训练好的CGAN模型的目录')
     parser.add_argument('--cae_dir', type=str, default='checkpoints/cae',
-                        help='Directory containing trained CAE model')
+                        help='包含训练好的CAE模型的目录')
+    parser.add_argument('--ae_dir', type=str, default='checkpoints/ae',
+                        help='包含训练好的AE模型的目录')
     parser.add_argument('--output_dir', type=str, default='results/comparison',
-                        help='Directory to save comparison results')
+                        help='保存比较结果的目录')
     parser.add_argument('--num_samples', type=int, default=10,
-                        help='Number of test samples to process')
+                        help='要处理的测试样本数')
     parser.add_argument('--input_dim', type=int, default=500,
-                        help='Dimension of input HRRP sequence')
+                        help='输入HRRP序列的维度')
     parser.add_argument('--feature_dim', type=int, default=64,
-                        help='Feature dimension for CGAN')
+                        help='CGAN的特征维度')
     parser.add_argument('--latent_dim', type=int, default=64,
-                        help='Latent dimension for CAE')
+                        help='CAE和AE的潜在维度')
     parser.add_argument('--hidden_dim', type=int, default=128,
-                        help='Hidden dimension for both models')
+                        help='CGAN和CAE的隐藏维度')
+    parser.add_argument('--ae_hidden_dim', type=int, default=256,
+                        help='AE的隐藏维度')
     parser.add_argument('--num_classes', type=int, default=3,
-                        help='Number of target identity classes')
-    parser.add_argument('--noise_level', type=float, default=0.1,
-                        help='Standard deviation of Gaussian noise')
+                        help='目标身份类别的数量')
 
     args = parser.parse_args()
 
-    # Create output directory if it doesn't exist
+    # 如果不存在，创建输出目录
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Compare methods
-    compare_methods(args)
+    # 定义要测试的PSNR级别
+    psnr_levels = [20, 10, 0]
+
+    # 存储每个PSNR级别的结果
+    results = {}
+
+    # 依次在每个PSNR级别上执行比较
+    for psnr_level in psnr_levels:
+        print(f"\n{'=' * 50}")
+        print(f"开始在PSNR = {psnr_level}dB条件下比较去噪方法")
+        print(f"{'=' * 50}\n")
+
+        results[psnr_level] = compare_methods(args, psnr_level)
+
+    # 创建所有PSNR级别的汇总比较图 (CVPR风格)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7), constrained_layout=True)
+
+    # PSNR提升比较
+    x = np.arange(len(psnr_levels))
+    width = 0.25
+
+    # 获取各PSNR级别下的PSNR提升值
+    cgan_improvements = [results[level][6] for level in psnr_levels]  # index 6 for cgan_psnr_improvement
+    cae_improvements = [results[level][7] for level in psnr_levels]  # index 7 for cae_psnr_improvement
+    ae_improvements = [results[level][8] for level in psnr_levels]  # index 8 for ae_psnr_improvement
+
+    # 绘制PSNR提升柱状图
+    bars1 = ax1.bar(x - width, cgan_improvements, width, label='CGAN', color=CVPR_COLORS['cgan'], edgecolor='k',
+                    linewidth=1)
+    bars2 = ax1.bar(x, cae_improvements, width, label='CAE', color=CVPR_COLORS['cae'], edgecolor='k', linewidth=1)
+    bars3 = ax1.bar(x + width, ae_improvements, width, label='AE', color=CVPR_COLORS['ae'], edgecolor='k', linewidth=1)
+
+    ax1.set_xlabel('Input Noise Level (PSNR)')
+    ax1.set_ylabel('PSNR Improvement (dB)')
+    ax1.set_title('PSNR Improvement vs. Noise Level', pad=15)
+    ax1.set_xticks(x)
+    ax1.set_xticklabels([f'{level} dB' for level in psnr_levels])
+    ax1.legend(loc='upper left', frameon=False)
+    ax1.grid(axis='y', linestyle='--', alpha=0.3)
+    ax1.spines['top'].set_visible(False)
+    ax1.spines['right'].set_visible(False)
+
+    # 添加数值标签
+    for bars in [bars1, bars2, bars3]:
+        for bar in bars:
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width() / 2., height + 0.1,
+                     f'+{height:.1f}dB', ha='center', va='bottom', fontsize=9)
+
+    # SSIM比较
+    # 获取各PSNR级别下的SSIM值
+    cgan_ssim = [results[level][3] for level in psnr_levels]  # index 3 for avg_cgan_ssim
+    cae_ssim = [results[level][4] for level in psnr_levels]  # index 4 for avg_cae_ssim
+    ae_ssim = [results[level][5] for level in psnr_levels]  # index 5 for avg_ae_ssim
+
+    bars1 = ax2.bar(x - width, cgan_ssim, width, label='CGAN', color=CVPR_COLORS['cgan'], edgecolor='k', linewidth=1)
+    bars2 = ax2.bar(x, cae_ssim, width, label='CAE', color=CVPR_COLORS['cae'], edgecolor='k', linewidth=1)
+    bars3 = ax2.bar(x + width, ae_ssim, width, label='AE', color=CVPR_COLORS['ae'], edgecolor='k', linewidth=1)
+
+    ax2.set_xlabel('Input Noise Level (PSNR)')
+    ax2.set_ylabel('Average SSIM')
+    ax2.set_title('SSIM vs. Noise Level', pad=15)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels([f'{level} dB' for level in psnr_levels])
+    ax2.legend(loc='lower right', frameon=False)
+    ax2.grid(axis='y', linestyle='--', alpha=0.3)
+    ax2.spines['top'].set_visible(False)
+    ax2.spines['right'].set_visible(False)
+
+    # 设置SSIM轴的范围以突出差异
+    ssim_min = min(min(cgan_ssim), min(cae_ssim), min(ae_ssim)) * 0.95
+    ax2.set_ylim([ssim_min, 1.0])
+
+    # 添加数值标签
+    for bars in [bars1, bars2, bars3]:
+        for bar in bars:
+            height = bar.get_height()
+            ax2.text(bar.get_x() + bar.get_width() / 2., height + 0.01,
+                     f'{height:.3f}', ha='center', va='bottom', fontsize=9)
+
+    fig.suptitle('Performance Comparison Across Different Noise Levels', fontsize=16)
+    plt.savefig(os.path.join(args.output_dir, 'psnr_comparison_summary.png'), dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+    # 保存汇总结果到文本文件
+    with open(os.path.join(args.output_dir, 'summary_results.txt'), 'w') as f:
+        f.write(f"CGAN vs CAE vs AE 在不同PSNR条件下的比较结果汇总\n")
+        f.write(f"=================================================\n\n")
+
+        for level in psnr_levels:
+            avg_cgan_psnr, avg_cae_psnr, avg_ae_psnr, avg_cgan_ssim, avg_cae_ssim, avg_ae_ssim, cgan_imp, cae_imp, ae_imp = \
+                results[level]
+
+            f.write(f"PSNR = {level}dB 条件下的结果:\n")
+            f.write(f"  CGAN - PSNR: {avg_cgan_psnr:.2f}dB, SSIM: {avg_cgan_ssim:.4f}, 改善: +{cgan_imp:.2f}dB\n")
+            f.write(f"  CAE  - PSNR: {avg_cae_psnr:.2f}dB, SSIM: {avg_cae_ssim:.4f}, 改善: +{cae_imp:.2f}dB\n")
+            f.write(f"  AE   - PSNR: {avg_ae_psnr:.2f}dB, SSIM: {avg_ae_ssim:.4f}, 改善: +{ae_imp:.2f}dB\n\n")
+
+            # 找出最佳方法
+            methods = ["CGAN", "CAE", "AE"]
+            psnr_values = [avg_cgan_psnr, avg_cae_psnr, avg_ae_psnr]
+            improvement_values = [cgan_imp, cae_imp, ae_imp]
+            ssim_values = [avg_cgan_ssim, avg_cae_ssim, avg_ae_ssim]
+
+            best_psnr_idx = np.argmax(psnr_values)
+            best_imp_idx = np.argmax(improvement_values)
+            best_ssim_idx = np.argmax(ssim_values)
+
+            f.write(f"  按PSNR值最佳方法: {methods[best_psnr_idx]} ({psnr_values[best_psnr_idx]:.2f}dB)\n")
+            f.write(f"  按PSNR改善最佳方法: {methods[best_imp_idx]} (+{improvement_values[best_imp_idx]:.2f}dB)\n")
+            f.write(f"  按SSIM最佳方法: {methods[best_ssim_idx]} ({ssim_values[best_ssim_idx]:.4f})\n")
+            f.write(f"{'=' * 50}\n\n")
+
+        # 输出总体结论
+        f.write("总体结论:\n")
+        # 计算每种方法在多少个PSNR级别上是最好的
+        psnr_winners = {}
+        ssim_winners = {}
+
+        for level in psnr_levels:
+            _, _, _, avg_cgan_ssim, avg_cae_ssim, avg_ae_ssim, cgan_imp, cae_imp, ae_imp = results[level]
+
+            # 按PSNR改善找最佳
+            imp_values = [cgan_imp, cae_imp, ae_imp]
+            methods = ["CGAN", "CAE", "AE"]
+            best_imp_idx = np.argmax(imp_values)
+            best_method = methods[best_imp_idx]
+
+            psnr_winners[best_method] = psnr_winners.get(best_method, 0) + 1
+
+            # 按SSIM找最佳
+            ssim_values = [avg_cgan_ssim, avg_cae_ssim, avg_ae_ssim]
+            best_ssim_idx = np.argmax(ssim_values)
+            best_method = methods[best_ssim_idx]
+
+            ssim_winners[best_method] = ssim_winners.get(best_method, 0) + 1
+
+        f.write(f"  按PSNR改善计算，各方法获胜次数:\n")
+        for method, count in psnr_winners.items():
+            f.write(f"    {method}: {count}/{len(psnr_levels)} 次\n")
+
+        f.write(f"\n  按SSIM计算，各方法获胜次数:\n")
+        for method, count in ssim_winners.items():
+            f.write(f"    {method}: {count}/{len(psnr_levels)} 次\n")
+
+    print(f"\n所有比较完成，汇总结果已保存至 {args.output_dir}")
+
+
+if __name__ == "__main__":
+    main()
