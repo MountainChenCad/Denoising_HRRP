@@ -3,3 +3,4 @@
 test_wcgan_hrrp.py
 train_wcgan_hrrp.py
 /checkpoints
+/results

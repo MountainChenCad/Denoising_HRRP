@@ -240,11 +240,11 @@ def train_cgan(args):
 
     # 绘制损失曲线
     plt.figure(figsize=(10, 6))
-    plt.plot(d_losses, label='判别器损失')
-    plt.plot(g_losses, label='生成器对抗损失')
-    plt.plot(r_losses, label='生成器重建损失')
+    plt.plot(d_losses, label='D_c loss')
+    plt.plot(g_losses, label='G_c adversial loss')
+    plt.plot(r_losses, label='G_c recontruction loss')
     plt.xlabel('Epoch')
-    plt.ylabel('损失')
+    plt.ylabel('Loss')
     plt.legend()
     plt.grid(True)
     plt.savefig(os.path.join(args.save_dir, 'training_loss.png'))
