@@ -10,6 +10,7 @@ from cgan_models import Generator
 from cae_models import ConvAutoEncoder
 from hrrp_dataset import HRRPDataset
 from torch.utils.data import DataLoader
+from skimage.metrics import structural_similarity as ssim
 
 
 def add_noise(hrrp_data, noise_level=0.1):
@@ -30,6 +31,21 @@ def add_noise(hrrp_data, noise_level=0.1):
     return noisy_data
 
 
+def calculate_ssim(x, y):
+    """
+    Calculate SSIM between two 1D signals
+
+    Parameters:
+        x (numpy.ndarray): First signal (1D)
+        y (numpy.ndarray): Second signal (1D)
+
+    Returns:
+        float: SSIM value between 0 and 1 (higher is better)
+    """
+    # SSIM requires inputs to be non-negative
+    return ssim(x, y, data_range=1.0)
+
+
 def compare_methods(args):
     """
     Compare CGAN and CAE methods for HRRP signal denoising
@@ -48,8 +64,8 @@ def compare_methods(args):
                                num_classes=args.num_classes).to(device)
 
     # Load their weights
-    G_D.load_state_dict(torch.load(os.path.join(args.cgan_dir, 'G_D.pth')))
-    G_I.load_state_dict(torch.load(os.path.join(args.cgan_dir, 'G_I.pth')))
+    G_D.load_state_dict(torch.load(os.path.join(args.cgan_dir, 'G_D_final.pth')))
+    G_I.load_state_dict(torch.load(os.path.join(args.cgan_dir, 'G_I_final.pth')))
 
     # Set feature extractors to evaluation mode
     G_D.eval()
@@ -86,6 +102,8 @@ def compare_methods(args):
     # Compare denoising performance
     cgan_total_mse = 0
     cae_total_mse = 0
+    cgan_total_ssim = 0
+    cae_total_ssim = 0
 
     with torch.no_grad():
         for i, (clean_data, radial_length, identity_label) in enumerate(test_loader):
@@ -113,8 +131,19 @@ def compare_methods(args):
             cgan_mse = mse_loss(cgan_denoised, clean_data).item()
             cae_mse = mse_loss(cae_denoised, clean_data).item()
 
+            # Calculate SSIM for both methods
+            clean_np = clean_data.cpu().numpy()[0]
+            cgan_np = cgan_denoised.cpu().numpy()[0]
+            cae_np = cae_denoised.cpu().numpy()[0]
+
+            cgan_ssim = calculate_ssim(clean_np, cgan_np)
+            cae_ssim = calculate_ssim(clean_np, cae_np)
+
+            # Accumulate metrics
             cgan_total_mse += cgan_mse
             cae_total_mse += cae_mse
+            cgan_total_ssim += cgan_ssim
+            cae_total_ssim += cae_ssim
 
             # Plot comparison results
             plt.figure(figsize=(15, 4))
@@ -133,13 +162,13 @@ def compare_methods(args):
 
             plt.subplot(1, 4, 3)
             plt.plot(cgan_denoised.cpu().numpy()[0])
-            plt.title(f'CGAN Denoised (MSE: {cgan_mse:.4f})')
+            plt.title(f'CGAN Denoised\nMSE: {cgan_mse:.4f}, SSIM: {cgan_ssim:.4f}')
             plt.xlabel('Range Bin')
             plt.ylabel('Magnitude')
 
             plt.subplot(1, 4, 4)
             plt.plot(cae_denoised.cpu().numpy()[0])
-            plt.title(f'CAE Denoised (MSE: {cae_mse:.4f})')
+            plt.title(f'CAE Denoised\nMSE: {cae_mse:.4f}, SSIM: {cae_ssim:.4f}')
             plt.xlabel('Range Bin')
             plt.ylabel('Magnitude')
 
@@ -148,32 +177,66 @@ def compare_methods(args):
             plt.close()
 
             print(f"Sample {i + 1}:")
-            print(f"  CGAN MSE: {cgan_mse:.4f}")
-            print(f"  CAE MSE: {cae_mse:.4f}")
-            if cgan_mse < cae_mse:
-                better = "CGAN"
-                diff = (cae_mse - cgan_mse) / cae_mse * 100
-            else:
-                better = "CAE"
-                diff = (cgan_mse - cae_mse) / cgan_mse * 100
-            print(f"  Better method: {better} by {diff:.2f}%")
+            print(f"  CGAN - MSE: {cgan_mse:.4f}, SSIM: {cgan_ssim:.4f}")
+            print(f"  CAE  - MSE: {cae_mse:.4f}, SSIM: {cae_ssim:.4f}")
 
-    # Calculate average MSE
+            # Compare methods based on both metrics
+            if cgan_mse < cae_mse and cgan_ssim > cae_ssim:
+                better = "CGAN"
+                mse_diff = (cae_mse - cgan_mse) / cae_mse * 100
+                ssim_diff = (cgan_ssim - cae_ssim) / cae_ssim * 100
+                print(f"  Better method: {better} (MSE better by {mse_diff:.2f}%, SSIM better by {ssim_diff:.2f}%)")
+            elif cae_mse < cgan_mse and cae_ssim > cgan_ssim:
+                better = "CAE"
+                mse_diff = (cgan_mse - cae_mse) / cgan_mse * 100
+                ssim_diff = (cae_ssim - cgan_ssim) / cgan_ssim * 100
+                print(f"  Better method: {better} (MSE better by {mse_diff:.2f}%, SSIM better by {ssim_diff:.2f}%)")
+            else:
+                print("  Mixed results: One method better in MSE, the other better in SSIM")
+                if cgan_mse < cae_mse:
+                    mse_better = "CGAN"
+                    mse_diff = (cae_mse - cgan_mse) / cae_mse * 100
+                else:
+                    mse_better = "CAE"
+                    mse_diff = (cgan_mse - cae_mse) / cgan_mse * 100
+
+                if cgan_ssim > cae_ssim:
+                    ssim_better = "CGAN"
+                    ssim_diff = (cgan_ssim - cae_ssim) / cae_ssim * 100
+                else:
+                    ssim_better = "CAE"
+                    ssim_diff = (cae_ssim - cgan_ssim) / cgan_ssim * 100
+
+                print(f"    MSE: {mse_better} better by {mse_diff:.2f}%")
+                print(f"    SSIM: {ssim_better} better by {ssim_diff:.2f}%")
+
+    # Calculate average metrics
     avg_cgan_mse = cgan_total_mse / min(args.num_samples, len(test_loader))
     avg_cae_mse = cae_total_mse / min(args.num_samples, len(test_loader))
+    avg_cgan_ssim = cgan_total_ssim / min(args.num_samples, len(test_loader))
+    avg_cae_ssim = cae_total_ssim / min(args.num_samples, len(test_loader))
 
-    print(f"\nAverage CGAN MSE: {avg_cgan_mse:.4f}")
-    print(f"Average CAE MSE: {avg_cae_mse:.4f}")
+    print(f"\nAverage Metrics:")
+    print(f"  CGAN - MSE: {avg_cgan_mse:.4f}, SSIM: {avg_cgan_ssim:.4f}")
+    print(f"  CAE  - MSE: {avg_cae_mse:.4f}, SSIM: {avg_cae_ssim:.4f}")
 
-    # Determine overall better method
-    if avg_cgan_mse < avg_cae_mse:
-        better_method = "CGAN"
-        improvement = (avg_cae_mse - avg_cgan_mse) / avg_cae_mse * 100
+    # Determine overall better method based on both metrics
+    mse_winner = "CGAN" if avg_cgan_mse < avg_cae_mse else "CAE"
+    ssim_winner = "CGAN" if avg_cgan_ssim > avg_cae_ssim else "CAE"
+
+    if mse_winner == ssim_winner:
+        better_method = mse_winner
+        mse_improvement = abs((avg_cgan_mse - avg_cae_mse) / max(avg_cgan_mse, avg_cae_mse) * 100)
+        ssim_improvement = abs((avg_cgan_ssim - avg_cae_ssim) / max(avg_cgan_ssim, avg_cae_ssim) * 100)
+        print(f"Overall better method: {better_method}")
+        print(f"  MSE improvement: {mse_improvement:.2f}%")
+        print(f"  SSIM improvement: {ssim_improvement:.2f}%")
     else:
-        better_method = "CAE"
-        improvement = (avg_cgan_mse - avg_cae_mse) / avg_cgan_mse * 100
-
-    print(f"Overall better method: {better_method} by {improvement:.2f}%")
+        print(f"Mixed overall results:")
+        print(
+            f"  MSE: {mse_winner} is better by {abs((avg_cgan_mse - avg_cae_mse) / max(avg_cgan_mse, avg_cae_mse) * 100):.2f}%")
+        print(
+            f"  SSIM: {ssim_winner} is better by {abs((avg_cgan_ssim - avg_cae_ssim) / max(avg_cgan_ssim, avg_cae_ssim) * 100):.2f}%")
 
     # Save summary results
     with open(os.path.join(args.output_dir, 'comparison_results.txt'), 'w') as f:
@@ -181,25 +244,58 @@ def compare_methods(args):
         f.write(f"============================\n\n")
         f.write(f"Noise Level: {args.noise_level}\n")
         f.write(f"Number of test samples: {min(args.num_samples, len(test_loader))}\n\n")
-        f.write(f"Average CGAN MSE: {avg_cgan_mse:.4f}\n")
-        f.write(f"Average CAE MSE: {avg_cae_mse:.4f}\n")
-        f.write(f"Overall better method: {better_method} by {improvement:.2f}%\n")
+        f.write(f"Average Metrics:\n")
+        f.write(f"  CGAN - MSE: {avg_cgan_mse:.4f}, SSIM: {avg_cgan_ssim:.4f}\n")
+        f.write(f"  CAE  - MSE: {avg_cae_mse:.4f}, SSIM: {avg_cae_ssim:.4f}\n\n")
 
-    # Create a bar chart comparing methods
+        if mse_winner == ssim_winner:
+            mse_improvement = abs((avg_cgan_mse - avg_cae_mse) / max(avg_cgan_mse, avg_cae_mse) * 100)
+            ssim_improvement = abs((avg_cgan_ssim - avg_cae_ssim) / max(avg_cgan_ssim, avg_cae_ssim) * 100)
+            f.write(f"Overall better method: {mse_winner}\n")
+            f.write(f"  MSE improvement: {mse_improvement:.2f}%\n")
+            f.write(f"  SSIM improvement: {ssim_improvement:.2f}%\n")
+        else:
+            f.write(f"Mixed overall results:\n")
+            f.write(
+                f"  MSE: {mse_winner} is better by {abs((avg_cgan_mse - avg_cae_mse) / max(avg_cgan_mse, avg_cae_mse) * 100):.2f}%\n")
+            f.write(
+                f"  SSIM: {ssim_winner} is better by {abs((avg_cgan_ssim - avg_cae_ssim) / max(avg_cgan_ssim, avg_cae_ssim) * 100):.2f}%\n")
+
+    # Create bar charts comparing methods
+    plt.figure(figsize=(12, 10))
+
+    # MSE comparison (lower is better)
+    plt.subplot(2, 1, 1)
     methods = ['CGAN', 'CAE']
     mse_values = [avg_cgan_mse, avg_cae_mse]
-
-    plt.figure(figsize=(10, 6))
-    plt.bar(methods, mse_values, color=['blue', 'green'])
-    plt.title('MSE Comparison between CGAN and CAE')
+    bars = plt.bar(methods, mse_values, color=['blue', 'green'])
+    plt.title('MSE Comparison (lower is better)')
     plt.xlabel('Method')
-    plt.ylabel('Average MSE (lower is better)')
+    plt.ylabel('Average MSE')
     plt.grid(axis='y', linestyle='--', alpha=0.7)
 
     # Add text labels above bars
-    for i, v in enumerate(mse_values):
-        plt.text(i, v + 0.001, f"{v:.4f}", ha='center')
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width() / 2., height + 0.001,
+                 f'{height:.4f}', ha='center', va='bottom')
 
+    # SSIM comparison (higher is better)
+    plt.subplot(2, 1, 2)
+    ssim_values = [avg_cgan_ssim, avg_cae_ssim]
+    bars = plt.bar(methods, ssim_values, color=['blue', 'green'])
+    plt.title('SSIM Comparison (higher is better)')
+    plt.xlabel('Method')
+    plt.ylabel('Average SSIM')
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+
+    # Add text labels above bars
+    for bar in bars:
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width() / 2., height + 0.001,
+                 f'{height:.4f}', ha='center', va='bottom')
+
+    plt.tight_layout()
     plt.savefig(os.path.join(args.output_dir, 'method_comparison.png'))
     plt.close()
 
