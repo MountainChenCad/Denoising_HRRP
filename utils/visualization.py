@@ -689,3 +689,70 @@ def create_grid_visualization(clean_samples, noisy_samples, denoised_dict, metri
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
     return fig
+
+def plot_classifier_accuracy(clean_acc, noisy_acc, denoised_acc_dict, figsize=(12, 6),
+                             title="Classification Accuracy Comparison", save_path=None):
+    """
+    Plot classification accuracy comparison
+
+    Parameters:
+        clean_acc (float): Accuracy on clean data
+        noisy_acc (float): Accuracy on noisy data
+        denoised_acc_dict (dict): Dictionary of accuracies for each denoising method
+        figsize (tuple): Figure size
+        title (str): Chart title
+        save_path (str): Path to save the figure
+
+    Returns:
+        matplotlib.figure.Figure: Figure object
+    """
+    set_plot_style()
+
+    # Extract model names and accuracies
+    models = list(denoised_acc_dict.keys())
+    denoised_accs = [denoised_acc_dict[model] for model in models]
+
+    # Create x positions for bars
+    x = np.arange(len(models) + 2)  # +2 for clean and noisy
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Create bar colors
+    bar_colors = [COLORS['clean'], COLORS['noisy']]
+    bar_colors.extend([COLORS.get(model.lower(), COLORS['highlight']) for model in models])
+
+    # Create bar labels
+    bar_labels = ['Clean Data', 'Noisy Data'] + models
+
+    # Create bar values
+    bar_values = [clean_acc, noisy_acc] + denoised_accs
+
+    # Create bars
+    bars = ax.bar(x, bar_values, color=bar_colors, edgecolor='black', linewidth=1)
+
+    # Add labels and title
+    ax.set_ylabel('Classification Accuracy (%)')
+    ax.set_title(title)
+    ax.set_xticks(x)
+    ax.set_xticklabels(bar_labels)
+
+    # Add value labels on bars
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width() / 2., height + 1,
+                f'{height:.1f}%', ha='center', va='bottom')
+
+    # Set y-axis to start from 0
+    ax.set_ylim(0, 105)  # Max 105% to leave room for text
+
+    # Add grid
+    ax.grid(axis='y', linestyle='--', alpha=0.3)
+
+    plt.tight_layout()
+
+    # Save figure if path provided
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+
+    return fig
