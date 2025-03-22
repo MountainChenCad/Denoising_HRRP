@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
 import numpy as np
 import os
 import argparse
@@ -18,7 +18,6 @@ from models.cae_models import ConvAutoEncoder
 from models.ae_models import AutoEncoder
 from utils.hrrp_dataset import HRRPDataset
 from utils.noise_utils import add_noise_for_psnr
-from utils.cnn_evaluator import HRRPCNN, train_cnn, evaluate_cnn
 
 
 def train_feature_extractors(args, device, psnr_level=None):
@@ -189,120 +188,6 @@ def train_feature_extractors(args, device, psnr_level=None):
     return output_dir
 
 
-def train_cnn_classifier(args, device):
-    """
-    Train 1D CNN classifier for HRRP recognition as described in the paper
-
-    Args:
-        args: Training arguments
-        device: Device to train on (CPU or GPU)
-
-    Returns:
-        Path to the directory where the CNN model is saved
-    """
-    print(f"Training CNN classifier for HRRP recognition...")
-
-    # Create output directory
-    output_dir = os.path.join(args.output_dir, "cnn_classifier")
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Create CNN model
-    model = HRRPCNN(input_dim=args.input_dim, num_classes=args.num_classes).to(device)
-
-    # Load dataset
-    train_dataset = HRRPDataset(args.train_dir)
-
-    # Update num_classes based on dataset
-    num_classes = train_dataset.get_num_classes()
-    if num_classes != args.num_classes:
-        print(f"Updating num_classes from {args.num_classes} to {num_classes} based on dataset")
-        args.num_classes = num_classes
-        model = HRRPCNN(input_dim=args.input_dim, num_classes=args.num_classes).to(device)
-
-    # Create new datasets that only contain data and labels (omitting radial_length)
-    # Collect all data and labels
-    all_data = []
-    all_labels = []
-
-    for i in range(len(train_dataset)):
-        data, _, label = train_dataset[i]
-        all_data.append(data)
-        all_labels.append(label)
-
-    # Convert to tensors
-    all_data = torch.stack(all_data)
-    all_labels = torch.tensor(all_labels, dtype=torch.long)
-
-    # Create proper tensor dataset with only data and labels
-    proper_dataset = TensorDataset(all_data, all_labels)
-
-    # Split dataset into train and validation
-    train_size = int(0.8 * len(proper_dataset))
-    val_size = len(proper_dataset) - train_size
-    train_subset, val_subset = torch.utils.data.random_split(
-        proper_dataset, [train_size, val_size]
-    )
-
-    # Create data loaders
-    train_loader = DataLoader(
-        train_subset,
-        batch_size=args.batch_size,
-        shuffle=True
-    )
-
-    val_loader = DataLoader(
-        val_subset,
-        batch_size=args.batch_size,
-        shuffle=False
-    )
-
-    # Print information about the dataset and model
-    print(f"Training CNN with dataset from: {args.train_dir}")
-    print(f"Number of samples: {len(train_dataset)}")
-    print(f"Number of classes: {args.num_classes}")
-    print(f"Train size: {train_size}, Validation size: {val_size}")
-
-    # Train CNN model
-    save_path = os.path.join(output_dir, 'cnn_classifier.pth')
-    history = train_cnn(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        num_epochs=args.cnn_epochs,
-        lr=args.cnn_lr,
-        device=device,
-        save_path=save_path
-    )
-
-    # Plot training curves
-    plt.figure(figsize=(12, 5))
-
-    plt.subplot(1, 2, 1)
-    plt.plot(history['train_loss'], label='Train Loss')
-    plt.plot(history['val_loss'], label='Val Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('CNN Training Loss')
-    plt.legend()
-    plt.grid(True)
-
-    plt.subplot(1, 2, 2)
-    plt.plot(history['train_acc'], label='Train Acc')
-    plt.plot(history['val_acc'], label='Val Acc')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy (%)')
-    plt.title('CNN Classification Accuracy')
-    plt.legend()
-    plt.grid(True)
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'cnn_training_curves.png'))
-    plt.close()
-
-    print(f"CNN training complete. Model saved to {save_path}")
-    return output_dir
-
-
 def train_cgan(args, device, psnr_level):
     """
     Train CGAN for HRRP signal denoising at a specific PSNR level
@@ -328,8 +213,8 @@ def train_cgan(args, device, psnr_level):
 
     # Load their weights
     if args.feature_extractors_dir:
-        G_D.load_state_dict(torch.load(os.path.join(args.feature_extractors_dir, 'G_D_final.pth'), map_location=device))
-        G_I.load_state_dict(torch.load(os.path.join(args.feature_extractors_dir, 'G_I_final.pth'), map_location=device))
+        G_D.load_state_dict(torch.load(os.path.join(args.feature_extractors_dir, 'G_D_final.pth')))
+        G_I.load_state_dict(torch.load(os.path.join(args.feature_extractors_dir, 'G_I_final.pth')))
 
     # Create CGAN models
     generator = Generator(input_dim=args.input_dim,
@@ -364,8 +249,7 @@ def train_cgan(args, device, psnr_level):
         G_I = TargetIdentityModule(input_dim=args.input_dim, feature_dim=args.feature_dim,
                                    num_classes=args.num_classes).to(device)
         if args.feature_extractors_dir:
-            G_I.load_state_dict(
-                torch.load(os.path.join(args.feature_extractors_dir, 'G_I_final.pth'), map_location=device))
+            G_I.load_state_dict(torch.load(os.path.join(args.feature_extractors_dir, 'G_I_final.pth')))
         optimizer_GI = optim.Adam(G_I.parameters(), lr=args.lr_feature_extractors, betas=(0.5, 0.999))
 
     # Training statistics
@@ -955,8 +839,8 @@ def main():
     parser = argparse.ArgumentParser(description='Unified training script for HRRP denoising models')
 
     # General parameters
-    parser.add_argument('--model', type=str, default='cnn',
-                        choices=['feature_extractors', 'cnn', 'cgan', 'cae', 'ae', 'all'],
+    parser.add_argument('--model', type=str, default='cgan',
+                        choices=['feature_extractors', 'cgan', 'cae', 'ae', 'all'],
                         help='Model to train')
     parser.add_argument('--train_dir', type=str, default='datasets/simulated_3/train',
                         help='Directory containing training data')
@@ -1015,14 +899,6 @@ def main():
     parser.add_argument('--ae_hidden_dim', type=int, default=128,
                         help='Dimension of hidden layers for AE')
 
-    # CNN parameters
-    parser.add_argument('--cnn_epochs', type=int, default=50,
-                        help='Number of epochs for CNN training')
-    parser.add_argument('--cnn_lr', type=float, default=0.001,
-                        help='Learning rate for CNN training')
-    parser.add_argument('--cnn_output_dir', type=str, default='checkpoints/cnn',
-                        help='Directory to save CNN classifier')
-
     args = parser.parse_args()
 
     # Parse PSNR levels
@@ -1047,12 +923,6 @@ def main():
             f.write(f"{arg}: {getattr(args, arg)}\n")
 
     # Train the selected models
-    if args.model in ['cnn', 'all']:
-        print("\n" + "=" * 50)
-        print("Training CNN classifier for evaluation")
-        print("=" * 50 + "\n")
-        train_cnn_classifier(args, device)
-
     if args.model in ['feature_extractors', 'all']:
         feature_extractors_dir = train_feature_extractors(args, device)
         args.feature_extractors_dir = feature_extractors_dir

@@ -1331,7 +1331,7 @@ def main():
                         help='Directory containing trained models')
     parser.add_argument('--output_dir', type=str, default='results',
                         help='Directory to save test results')
-    parser.add_argument('--num_samples', type=int, default=10,
+    parser.add_argument('--num_samples', type=int, default=100,
                         help='Number of test samples to process')
     parser.add_argument('--input_dim', type=int, default=500,
                         help='Dimension of input HRRP sequence')
@@ -1357,13 +1357,13 @@ def main():
                         help='Dimension of hidden layers for AE')
 
     # CNN evaluation parameters
-    parser.add_argument('--use_cnn_eval', action='store_true',
+    parser.add_argument('--use_cnn_eval', default=1,
                         help='Use CNN for recognition accuracy evaluation')
-    parser.add_argument('--cnn_dir', type=str, default='checkpoints/cnn',
+    parser.add_argument('--cnn_dir', type=str, default='checkpoints/cnn_classifier',
                         help='Directory to save/load CNN classifier')
-    parser.add_argument('--retrain_cnn', action='store_true',
+    parser.add_argument('--retrain_cnn', default=0,
                         help='Force retraining of CNN classifier even if one exists')
-    parser.add_argument('--cnn_epochs', type=int, default=50,
+    parser.add_argument('--cnn_epochs', type=int, default=20,
                         help='Number of epochs for CNN training')
     parser.add_argument('--cnn_lr', type=float, default=0.001,
                         help='Learning rate for CNN training')
@@ -1434,4 +1434,5 @@ if __name__ == "__main__":
     elapsed_time = time.time() - start_time
     hours, remainder = divmod(elapsed_time, 3600)
     minutes, seconds = divmod(remainder, 60)
+    print(f"Total testing time: {int(hours)}h {int(minutes)}m {seconds:.2f}s")
     print(f"Total testing time: {int(hours)}h {int(minutes)}m {seconds:.2f}s")

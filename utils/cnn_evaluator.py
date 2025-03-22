@@ -32,27 +32,20 @@ class HRRPCNN(nn.Module):
         self.conv2 = nn.Conv1d(64, 128, kernel_size=3, stride=2, padding=1)
         self.pool2 = nn.MaxPool1d(kernel_size=3, stride=2, padding=1)
 
-        # Calculate the size after convolutions and pooling
-        conv1_out = (input_dim + 2 * 1 - 3) // 2 + 1  # formula: (W + 2P - K)//S + 1
-        pool1_out = (conv1_out + 2 * 1 - 3) // 2 + 1
-        conv2_out = (pool1_out + 2 * 1 - 3) // 2 + 1
-        pool2_out = (conv2_out + 2 * 1 - 3) // 2 + 1
-
-        self.fc_input_size = 128 * pool2_out
-
-        print(f"CNN Layer Dimensions:")
-        print(f"Input: {input_dim}")
-        print(f"After Conv1: {conv1_out}")
-        print(f"After Pool1: {pool1_out}")
-        print(f"After Conv2: {conv2_out}")
-        print(f"After Pool2: {pool2_out}")
-        print(f"Flattened size: {self.fc_input_size}")
-
-        # Fully connected layers
-        self.fc1 = nn.Linear(self.fc_input_size, 256)
+        # Fully connected layers - we'll determine the input size in the forward pass
+        self.fc1 = None  # Will be initialized in the first forward pass
         self.fc2 = nn.Linear(256, 128)
         self.dropout = nn.Dropout(0.5)
         self.fc3 = nn.Linear(128, num_classes)
+
+        self.initialized = False
+
+    def _initialize_fc_layer(self, x_size):
+        """Initialize the first fully connected layer based on the actual flattened size"""
+        # Get device from existing parameters instead of x_size (which is an integer)
+        self.fc1 = nn.Linear(x_size, 256).to(self.conv1.weight.device)
+        self.initialized = True
+        print(f"Initialized FC1 layer with input size: {x_size}")
 
     def forward(self, x):
         # Ensure input has the right shape [batch_size, 1, input_dim]
@@ -71,9 +64,9 @@ class HRRPCNN(nn.Module):
         batch_size = x.size(0)
         x = x.view(batch_size, -1)
 
-        # For debugging, print the shape
-        if x.size(1) != self.fc_input_size:
-            print(f"Warning: Flattened size {x.size(1)} doesn't match expected {self.fc_input_size}")
+        # Initialize FC1 if this is the first forward pass
+        if not self.initialized:
+            self._initialize_fc_layer(x.size(1))
 
         # Fully connected layers
         x = F.relu(self.fc1(x))
@@ -109,8 +102,6 @@ def train_cnn(model, train_loader, val_loader=None, num_epochs=50, lr=0.001,
     """
     model = model.to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
     # Initialize variables to track best model
     best_val_acc = 0.0
@@ -120,6 +111,20 @@ def train_cnn(model, train_loader, val_loader=None, num_epochs=50, lr=0.001,
         'val_loss': [],
         'val_acc': []
     }
+
+    # First pass a batch through the model to initialize FC1 before creating optimizer
+    for batch in train_loader:
+        # Get sample batch to initialize model
+        inputs = batch[0]
+        inputs = inputs.float().to(device)
+        # Forward pass to initialize fc1
+        model(inputs)
+        # Break after one batch
+        break
+
+    # Now create optimizer after all parameters are initialized
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
     # Training loop
     for epoch in range(num_epochs):
@@ -131,8 +136,14 @@ def train_cnn(model, train_loader, val_loader=None, num_epochs=50, lr=0.001,
         # Progress bar
         pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{num_epochs}")
 
-        for inputs, labels in pbar:
-            inputs, labels = inputs.to(device), labels.to(device)
+        for batch in pbar:
+            # HRRP dataset returns (data, radial_length, identity_label)
+            # We only need data and identity_label for the CNN
+            inputs = batch[0]
+            labels = batch[2]
+
+            inputs = inputs.float().to(device)
+            labels = labels.long().to(device)
 
             optimizer.zero_grad()
 
@@ -220,8 +231,20 @@ def evaluate_cnn(model, data_loader, criterion=None,
         criterion = nn.CrossEntropyLoss()
 
     with torch.no_grad():
-        for inputs, labels in data_loader:
-            inputs, labels = inputs.to(device), labels.to(device)
+        for batch in data_loader:
+            # HRRP dataset returns (data, radial_length, identity_label)
+            # We only need data and identity_label for the CNN
+            if isinstance(batch, (list, tuple)) and len(batch) == 3:
+                inputs = batch[0]
+                labels = batch[2]
+            elif isinstance(batch, (list, tuple)) and len(batch) == 2:
+                # For cases when we're using TensorDataset (clean/noisy/denoised evaluation)
+                inputs, labels = batch
+            else:
+                raise ValueError("Unexpected batch format")
+
+            inputs = inputs.float().to(device)
+            labels = labels.long().to(device)
 
             # Forward pass
             outputs = model(inputs)
