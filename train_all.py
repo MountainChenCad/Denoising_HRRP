@@ -15,7 +15,8 @@ import time
 from models.modules import TargetRadialLengthModule, TargetIdentityModule
 from models.cgan_models import Generator, Discriminator
 from models.cae_models import ConvAutoEncoder
-from models.ae_models import AutoEncoder
+from models.msae_models import ModifiedSparseAutoEncoder
+from models.msae_loss import MSAELoss
 from utils.hrrp_dataset import HRRPDataset
 from utils.noise_utils import add_noise_for_psnr
 
@@ -687,9 +688,10 @@ def train_cae(args, device, psnr_level):
     return output_dir
 
 
-def train_ae(args, device, psnr_level):
+# train_msae function to be added to train_all.py
+def train_msae(args, device, psnr_level):
     """
-    Train AE for HRRP signal denoising at a specific PSNR level
+    Train Modified Sparse AutoEncoder for HRRP signal denoising at a specific PSNR level
 
     Args:
         args: Training arguments
@@ -699,36 +701,48 @@ def train_ae(args, device, psnr_level):
     Returns:
         Path to the directory where the model is saved
     """
-    print(f"Training AE for PSNR level {psnr_level}dB...")
+    print(f"Training MSAE for PSNR level {psnr_level}dB...")
 
     # Create output directory
-    output_dir = os.path.join(args.output_dir, f"ae_psnr_{psnr_level}dB")
+    output_dir = os.path.join(args.output_dir, f"msae_psnr_{psnr_level}dB")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Create AE model
-    model = AutoEncoder(input_dim=args.input_dim,
-                        latent_dim=args.latent_dim,
-                        hidden_dim=args.ae_hidden_dim).to(device)
+    # Create MSAE model
+    model = ModifiedSparseAutoEncoder(
+        input_dim=args.input_dim,
+        latent_dim=args.latent_dim,
+        hidden_dim=args.msae_hidden_dim,
+        sparsity_param=args.sparsity_param,
+        reg_lambda=args.reg_lambda,
+        sparsity_beta=args.sparsity_beta
+    ).to(device)
 
     # Define loss function and optimizer
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    criterion = MSAELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     # Load dataset
     train_dataset = HRRPDataset(args.train_dir)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     # Print information about the dataset and model
-    print(f"Training AE with dataset from: {args.train_dir}")
+    print(f"Training MSAE with dataset from: {args.train_dir}")
     print(f"Number of samples: {len(train_dataset)}")
+    print(f"Sparsity parameter: {args.sparsity_param}, Beta: {args.sparsity_beta}")
 
     # Arrays for tracking loss
     train_losses = []
+    reconstruction_losses = []
+    weight_reg_losses = []
+    sparsity_losses = []
 
     # Training loop
     for epoch in range(args.epochs):
         model.train()
         epoch_loss = 0.0
+        epoch_rec_loss = 0.0
+        epoch_weight_loss = 0.0
+        epoch_sparsity_loss = 0.0
 
         # Create progress bar
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{args.epochs}")
@@ -744,27 +758,49 @@ def train_ae(args, device, psnr_level):
             optimizer.zero_grad()
 
             # Forward pass (denoising task: noisy->clean)
-            reconstructed, _ = model(noisy_data)
+            reconstructed, latent = model(noisy_data)
 
-            # Calculate loss (between reconstruction and clean data)
-            loss = criterion(reconstructed, clean_data)
+            # Calculate loss
+            loss, loss_components = criterion(model, clean_data, reconstructed, latent)
 
             # Backward pass and optimize
             loss.backward()
             optimizer.step()
 
             # Update epoch loss
-            epoch_loss += loss.item()
+            epoch_loss += loss_components['total']
+            epoch_rec_loss += loss_components['reconstruction']
+            epoch_weight_loss += loss_components['weight_reg']
+            epoch_sparsity_loss += loss_components['sparsity']
 
             # Update progress bar
-            progress_bar.set_postfix({'Loss': f"{loss.item():.4f}"})
+            progress_bar.set_postfix({
+                'Loss': f"{loss_components['total']:.4f}",
+                'Rec': f"{loss_components['reconstruction']:.4f}",
+                'Sparsity': f"{loss_components['sparsity']:.4f}"
+            })
 
         # Calculate average epoch loss
         epoch_loss /= len(train_loader)
+        epoch_rec_loss /= len(train_loader)
+        epoch_weight_loss /= len(train_loader)
+        epoch_sparsity_loss /= len(train_loader)
+
+        # Save losses for plotting
         train_losses.append(epoch_loss)
+        reconstruction_losses.append(epoch_rec_loss)
+        weight_reg_losses.append(epoch_weight_loss)
+        sparsity_losses.append(epoch_sparsity_loss)
 
         # Print epoch summary
-        print(f"Epoch {epoch + 1}/{args.epochs} - Avg Loss: {epoch_loss:.4f}")
+        print(f"Epoch {epoch + 1}/{args.epochs} - "
+              f"Avg Loss: {epoch_loss:.4f}, Rec: {epoch_rec_loss:.4f}, "
+              f"Weight: {epoch_weight_loss:.4f}, Sparsity: {epoch_sparsity_loss:.4f}")
+
+        # Apply SVD weight modification periodically
+        if (epoch + 1) % args.svd_interval == 0:
+            model.modify_weights_with_svd(threshold=args.svd_threshold)
+            print(f"Applied SVD weight modification at epoch {epoch + 1}")
 
         # Save checkpoint periodically
         if (epoch + 1) % args.save_interval == 0:
@@ -772,7 +808,7 @@ def train_ae(args, device, psnr_level):
             os.makedirs(checkpoint_dir, exist_ok=True)
 
             # Save model
-            torch.save(model.state_dict(), os.path.join(checkpoint_dir, 'ae_model.pth'))
+            torch.save(model.state_dict(), os.path.join(checkpoint_dir, 'msae_model.pth'))
 
             # Save sample denoising results
             if args.save_samples:
@@ -806,7 +842,7 @@ def train_ae(args, device, psnr_level):
 
                     plt.subplot(1, 3, 3)
                     plt.plot(sample_denoised.cpu().numpy()[0])
-                    plt.title('Denoised HRRP')
+                    plt.title('MSAE Denoised HRRP')
                     plt.xlabel('Range')
                     plt.ylabel('Magnitude')
 
@@ -817,20 +853,33 @@ def train_ae(args, device, psnr_level):
                 model.train()
 
     # Save final model
-    torch.save(model.state_dict(), os.path.join(output_dir, 'ae_model_final.pth'))
+    torch.save(model.state_dict(), os.path.join(output_dir, 'msae_model_final.pth'))
 
-    # Plot loss curve
-    plt.figure(figsize=(10, 6))
-    plt.plot(train_losses, label='Training Loss')
+    # Plot loss curves
+    plt.figure(figsize=(15, 6))
+
+    plt.subplot(1, 2, 1)
+    plt.plot(train_losses, label='Total Loss')
+    plt.plot(reconstruction_losses, label='Reconstruction Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
-    plt.title(f'AE Training Loss (PSNR={psnr_level}dB)')
+    plt.title(f'MSAE Training Loss (PSNR={psnr_level}dB)')
     plt.legend()
     plt.grid(True)
+
+    plt.subplot(1, 2, 2)
+    plt.plot(weight_reg_losses, label='Weight Regularization')
+    plt.plot(sparsity_losses, label='Sparsity Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title('Regularization Components')
+    plt.legend()
+    plt.grid(True)
+
     plt.savefig(os.path.join(output_dir, 'training_loss.png'))
     plt.close()
 
-    print(f"AE training complete for PSNR={psnr_level}dB. Model saved to {output_dir}")
+    print(f"MSAE training complete for PSNR={psnr_level}dB. Model saved to {output_dir}")
     return output_dir
 
 
@@ -839,8 +888,8 @@ def main():
     parser = argparse.ArgumentParser(description='Unified training script for HRRP denoising models')
 
     # General parameters
-    parser.add_argument('--model', type=str, default='cae',
-                        choices=['feature_extractors', 'cgan', 'cae', 'ae', 'all'],
+    parser.add_argument('--model', type=str, default='msae',
+                        choices=['feature_extractors', 'cgan', 'cae', 'msae', 'all'],
                         help='Model to train')
     parser.add_argument('--train_dir', type=str, default='datasets/simulated_3/train',
                         help='Directory containing training data')
@@ -893,11 +942,21 @@ def main():
     parser.add_argument('--update_feature_extractors', default=1,
                         help='Whether to update feature extractors during CGAN training')
 
-    # CAE and AE specific parameters
+    # CAE and MSAE specific parameters
     parser.add_argument('--latent_dim', type=int, default=64,
                         help='Dimension of latent space for CAE and AE')
-    parser.add_argument('--ae_hidden_dim', type=int, default=128,
-                        help='Dimension of hidden layers for AE')
+    parser.add_argument('--msae_hidden_dim', type=int, default=128,
+                        help='Dimension of hidden layers for MSAE')
+    parser.add_argument('--sparsity_param', type=float, default=0.05,
+                        help='Sparsity parameter (p) for MSAE')
+    parser.add_argument('--reg_lambda', type=float, default=0.0001,
+                        help='Weight regularization parameter (lambda) for MSAE')
+    parser.add_argument('--sparsity_beta', type=float, default=3.0,
+                        help='Sparsity weight parameter (beta) for MSAE')
+    parser.add_argument('--svd_interval', type=int, default=10,
+                        help='Interval for SVD weight modification in MSAE')
+    parser.add_argument('--svd_threshold', type=float, default=0.1,
+                        help='Threshold for singular value pruning in MSAE')
 
     args = parser.parse_args()
 
@@ -939,8 +998,8 @@ def main():
         if args.model in ['cae', 'all']:
             train_cae(args, device, psnr_level)
 
-        if args.model in ['ae', 'all']:
-            train_ae(args, device, psnr_level)
+        if args.model in ['msae', 'all']:
+            train_msae(args, device, psnr_level)
 
     print("\nTraining complete for all models and PSNR levels.")
 

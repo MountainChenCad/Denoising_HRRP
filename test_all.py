@@ -13,7 +13,7 @@ import copy
 from models.modules import TargetRadialLengthModule, TargetIdentityModule
 from models.cgan_models import Generator
 from models.cae_models import ConvAutoEncoder
-from models.ae_models import AutoEncoder
+from models.msae_models import ModifiedSparseAutoEncoder
 from utils.hrrp_dataset import HRRPDataset
 from torch.utils.data import DataLoader, TensorDataset
 from utils.noise_utils import add_noise_for_exact_psnr, calculate_psnr, calculate_ssim
@@ -36,7 +36,7 @@ COLORS = {
     'noisy': '#7F7F7F',  # Gray
     'cgan': '#1F77B4',  # Blue
     'cae': '#2CA02C',  # Green
-    'ae': '#D62728',  # Red
+    'msae': '#D62728',  # Red
     'clean': '#000000'  # Black
 }
 
@@ -616,9 +616,10 @@ def test_cae(args, device, psnr_level, cnn_model=None):
     return summary
 
 
-def test_ae(args, device, psnr_level, cnn_model=None):
+# test_msae function to be added to test_all.py
+def test_msae(args, device, psnr_level, cnn_model=None):
     """
-    Test AE model for HRRP signal denoising at a specific PSNR level
+    Test MSAE model for HRRP signal denoising at a specific PSNR level
 
     Args:
         args: Testing arguments
@@ -629,27 +630,32 @@ def test_ae(args, device, psnr_level, cnn_model=None):
     Returns:
         Dictionary of test metrics
     """
-    print(f"Testing AE for PSNR level {psnr_level}dB...")
+    print(f"Testing MSAE for PSNR level {psnr_level}dB...")
 
     # Create output directory
-    output_dir = os.path.join(args.output_dir, f"ae_psnr_{psnr_level}dB")
+    output_dir = os.path.join(args.output_dir, f"msae_psnr_{psnr_level}dB")
     os.makedirs(output_dir, exist_ok=True)
 
-    # Load AE model
-    model = AutoEncoder(input_dim=args.input_dim,
-                        latent_dim=args.latent_dim,
-                        hidden_dim=args.ae_hidden_dim).to(device)
+    # Load MSAE model
+    model = ModifiedSparseAutoEncoder(
+        input_dim=args.input_dim,
+        latent_dim=args.latent_dim,
+        hidden_dim=args.msae_hidden_dim,
+        sparsity_param=args.sparsity_param,
+        reg_lambda=args.reg_lambda,
+        sparsity_beta=args.sparsity_beta
+    ).to(device)
 
     # Load model weights
-    ae_dir = os.path.join(args.load_dir, f"ae_psnr_{psnr_level}dB")
+    msae_dir = os.path.join(args.load_dir, f"msae_psnr_{psnr_level}dB")
 
     # Check if model exists
-    if not os.path.exists(ae_dir):
-        print(f"No AE model found for PSNR={psnr_level}dB at {ae_dir}")
+    if not os.path.exists(msae_dir):
+        print(f"No MSAE model found for PSNR={psnr_level}dB at {msae_dir}")
         return None
 
     # Load model weights
-    model.load_state_dict(torch.load(os.path.join(ae_dir, 'ae_model_final.pth'), map_location=device))
+    model.load_state_dict(torch.load(os.path.join(msae_dir, 'msae_model_final.pth'), map_location=device))
 
     # Set model to evaluation mode
     model.eval()
@@ -674,7 +680,7 @@ def test_ae(args, device, psnr_level, cnn_model=None):
         all_labels = []
 
     # Test samples with progress bar
-    progress_bar = tqdm(range(min(args.num_samples, len(test_loader))), desc=f"Testing AE PSNR={psnr_level}dB")
+    progress_bar = tqdm(range(min(args.num_samples, len(test_loader))), desc=f"Testing MSAE PSNR={psnr_level}dB")
 
     results = []
 
@@ -748,8 +754,8 @@ def test_ae(args, device, psnr_level, cnn_model=None):
             plt.grid(True, linestyle='--', alpha=0.3)
 
             plt.subplot(1, 3, 3)
-            plt.plot(denoised_data.cpu().numpy()[0], color=COLORS['ae'], linewidth=1.5)
-            plt.title(f'AE Denoised (PSNR: {denoised_psnr:.2f}dB, SSIM: {denoised_ssim:.4f})')
+            plt.plot(denoised_data.cpu().numpy()[0], color='purple', linewidth=1.5)
+            plt.title(f'MSAE Denoised (PSNR: {denoised_psnr:.2f}dB, SSIM: {denoised_ssim:.4f})')
             plt.xlabel('Range Bin')
             plt.ylabel('Magnitude')
             plt.grid(True, linestyle='--', alpha=0.3)
@@ -804,7 +810,7 @@ def test_ae(args, device, psnr_level, cnn_model=None):
 
     # Save summary metrics
     summary = {
-        'model': 'AE',
+        'model': 'MSAE',
         'psnr_level': psnr_level,
         'avg_noisy_mse': avg_noisy_mse,
         'avg_denoised_mse': avg_denoised_mse,
@@ -820,7 +826,7 @@ def test_ae(args, device, psnr_level, cnn_model=None):
         summary.update(cnn_metrics)
 
     # Print summary
-    print(f"\nAE Results for PSNR={psnr_level}dB:")
+    print(f"\nMSAE Results for PSNR={psnr_level}dB:")
     print(f"  Average Noisy PSNR: {avg_noisy_psnr:.2f}dB")
     print(f"  Average Denoised PSNR: {avg_denoised_psnr:.2f}dB")
     print(f"  Average PSNR Improvement: {avg_psnr_improvement:.2f}dB")
@@ -837,8 +843,8 @@ def test_ae(args, device, psnr_level, cnn_model=None):
 
     # Write summary to file
     with open(os.path.join(output_dir, 'test_results.txt'), 'w') as f:
-        f.write(f"AE Test Results for PSNR={psnr_level}dB\n")
-        f.write(f"===================================\n\n")
+        f.write(f"MSAE Test Results for PSNR={psnr_level}dB\n")
+        f.write(f"====================================\n\n")
         f.write(f"Number of test samples: {n_samples}\n\n")
         f.write(f"Average Metrics:\n")
         f.write(f"  Noisy PSNR: {avg_noisy_psnr:.2f}dB\n")
@@ -1320,8 +1326,8 @@ def main():
     parser = argparse.ArgumentParser(description='Unified testing script for HRRP denoising models')
 
     # General parameters
-    parser.add_argument('--model', type=str, default='all',
-                        choices=['cgan', 'cae', 'ae', 'all'],
+    parser.add_argument('--model', type=str, default='cgan',
+                        choices=['cgan', 'cae', 'msae', 'all'],
                         help='Model to test')
     parser.add_argument('--test_dir', type=str, default='datasets/simulated_3/test',
                         help='Directory containing test data')
@@ -1350,11 +1356,21 @@ def main():
     parser.add_argument('--hidden_dim', type=int, default=128,
                         help='Dimension of hidden layers for CGAN and CAE')
 
-    # CAE and AE specific parameters
+    # CAE and MSAE specific parameters
     parser.add_argument('--latent_dim', type=int, default=64,
                         help='Dimension of latent space for CAE and AE')
-    parser.add_argument('--ae_hidden_dim', type=int, default=128,
-                        help='Dimension of hidden layers for AE')
+    parser.add_argument('--msae_hidden_dim', type=int, default=128,
+                        help='Dimension of hidden layers for MSAE')
+    parser.add_argument('--sparsity_param', type=float, default=0.05,
+                        help='Sparsity parameter (p) for MSAE')
+    parser.add_argument('--reg_lambda', type=float, default=0.0001,
+                        help='Weight regularization parameter (lambda) for MSAE')
+    parser.add_argument('--sparsity_beta', type=float, default=3.0,
+                        help='Sparsity weight parameter (beta) for MSAE')
+    parser.add_argument('--svd_interval', type=int, default=10,
+                        help='Interval for SVD weight modification in MSAE')
+    parser.add_argument('--svd_threshold', type=float, default=0.1,
+                        help='Threshold for singular value pruning in MSAE')
 
     # CNN evaluation parameters
     parser.add_argument('--use_cnn_eval', default=1,
@@ -1409,10 +1425,10 @@ def main():
             if cae_result:
                 psnr_results['CAE'] = cae_result
 
-        if args.model in ['ae', 'all']:
-            ae_result = test_ae(args, device, psnr_level, cnn_model)
+        if args.model in ['msae', 'all']:
+            ae_result = test_msae(args, device, psnr_level, cnn_model)
             if ae_result:
-                psnr_results['AE'] = ae_result
+                psnr_results['MSAE'] = ae_result
 
         # Compare methods if we have results from multiple models
         if len(psnr_results) > 1:
