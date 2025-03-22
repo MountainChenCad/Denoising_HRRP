@@ -888,7 +888,7 @@ def main():
     parser = argparse.ArgumentParser(description='Unified training script for HRRP denoising models')
 
     # General parameters
-    parser.add_argument('--model', type=str, default='msae',
+    parser.add_argument('--model', type=str, default='all',
                         choices=['feature_extractors', 'cgan', 'cae', 'msae', 'all'],
                         help='Model to train')
     parser.add_argument('--train_dir', type=str, default='datasets/simulated_3/train',
@@ -897,9 +897,9 @@ def main():
                         help='Directory to save trained models')
     parser.add_argument('--batch_size', type=int, default=64,
                         help='Batch size for training')
-    parser.add_argument('--epochs', type=int, default=50,
+    parser.add_argument('--epochs', type=int, default=200,
                         help='Number of training epochs')
-    parser.add_argument('--lr', type=float, default=0.000001,
+    parser.add_argument('--lr', type=float, default=0.0001,
                         help='Learning rate')
     parser.add_argument('--input_dim', type=int, default=500,
                         help='Dimension of input HRRP sequence')

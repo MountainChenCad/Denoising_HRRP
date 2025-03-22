@@ -1326,7 +1326,7 @@ def main():
     parser = argparse.ArgumentParser(description='Unified testing script for HRRP denoising models')
 
     # General parameters
-    parser.add_argument('--model', type=str, default='cgan',
+    parser.add_argument('--model', type=str, default='msae',
                         choices=['cgan', 'cae', 'msae', 'all'],
                         help='Model to test')
     parser.add_argument('--test_dir', type=str, default='datasets/simulated_3/test',
