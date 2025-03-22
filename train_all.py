@@ -839,7 +839,7 @@ def main():
     parser = argparse.ArgumentParser(description='Unified training script for HRRP denoising models')
 
     # General parameters
-    parser.add_argument('--model', type=str, default='all',
+    parser.add_argument('--model', type=str, default='cgan',
                         choices=['feature_extractors', 'cgan', 'cae', 'ae', 'all'],
                         help='Model to train')
     parser.add_argument('--train_dir', type=str, default='datasets/simulated_3/train',
@@ -848,7 +848,7 @@ def main():
                         help='Directory to save trained models')
     parser.add_argument('--batch_size', type=int, default=64,
                         help='Batch size for training')
-    parser.add_argument('--epochs', type=int, default=200,
+    parser.add_argument('--epochs', type=int, default=20,
                         help='Number of training epochs')
     parser.add_argument('--lr', type=float, default=0.0001,
                         help='Learning rate')
