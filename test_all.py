@@ -1361,7 +1361,7 @@ def main():
                         help='Use CNN for recognition accuracy evaluation')
     parser.add_argument('--cnn_dir', type=str, default='checkpoints/cnn_classifier',
                         help='Directory to save/load CNN classifier')
-    parser.add_argument('--retrain_cnn', default=0,
+    parser.add_argument('--retrain_cnn', default=1,
                         help='Force retraining of CNN classifier even if one exists')
     parser.add_argument('--cnn_epochs', type=int, default=20,
                         help='Number of epochs for CNN training')
