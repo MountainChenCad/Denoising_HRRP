@@ -85,7 +85,7 @@ class HRRPDataset(Dataset):
 
 
 if __name__ == "__main__":
-    dataset = HRRPDataset("datasets/simulated_3/train")
+    dataset = HRRPDataset("../datasets/simulated_3/train")
     for i in range(min(5, len(dataset))):  # Print info for the first 5 samples
         data, radial_length, identity = dataset[i]
         print(f"Sample {i}:")

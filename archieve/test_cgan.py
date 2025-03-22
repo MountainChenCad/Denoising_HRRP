@@ -1,12 +1,11 @@
 import torch
 import torch.nn as nn
-import numpy as np
 import os
 import argparse
 import matplotlib.pyplot as plt
-from models import TargetRadialLengthModule, TargetIdentityModule
-from cgan_models import Generator
-from hrrp_dataset import HRRPDataset
+from models.modules import TargetRadialLengthModule, TargetIdentityModule
+from models.cgan_models import Generator
+from utils.hrrp_dataset import HRRPDataset
 from torch.utils.data import DataLoader
 
 

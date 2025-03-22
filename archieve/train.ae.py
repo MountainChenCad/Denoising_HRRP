@@ -7,8 +7,8 @@ import numpy as np
 import os
 import argparse
 import matplotlib.pyplot as plt
-from ae_models import AutoEncoder
-from hrrp_dataset import HRRPDataset
+from models.ae_models import AutoEncoder
+from utils.hrrp_dataset import HRRPDataset
 import random
 
 

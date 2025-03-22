@@ -5,14 +5,13 @@ import numpy as np
 import os
 import argparse
 import matplotlib.pyplot as plt
-from models import TargetRadialLengthModule, TargetIdentityModule
-from cgan_models import Generator
-from cae_models import ConvAutoEncoder
-from ae_models import AutoEncoder
-from hrrp_dataset import HRRPDataset
+from models.modules import TargetRadialLengthModule, TargetIdentityModule
+from models.cgan_models import Generator
+from models.cae_models import ConvAutoEncoder
+from models.ae_models import AutoEncoder
+from utils.hrrp_dataset import HRRPDataset
 from torch.utils.data import DataLoader
 from skimage.metrics import structural_similarity as ssim
-import math
 
 
 def add_noise_for_psnr(signal, psnr_db):

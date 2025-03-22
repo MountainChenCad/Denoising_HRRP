@@ -8,9 +8,9 @@ import numpy as np
 import os
 import argparse
 import matplotlib.pyplot as plt
-from models import TargetRadialLengthModule, TargetIdentityModule
-from cgan_models import Generator, Discriminator
-from hrrp_dataset import HRRPDataset
+from models.modules import TargetRadialLengthModule, TargetIdentityModule
+from models.cgan_models import Generator, Discriminator
+from utils.hrrp_dataset import HRRPDataset
 import random
 
 

@@ -2,11 +2,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-import numpy as np
 import os
 import argparse
-from models import TargetRadialLengthModule, TargetIdentityModule
-from hrrp_dataset import HRRPDataset
+from models.modules import TargetRadialLengthModule, TargetIdentityModule
+from utils.hrrp_dataset import HRRPDataset
 
 
 def train_G_D(args):

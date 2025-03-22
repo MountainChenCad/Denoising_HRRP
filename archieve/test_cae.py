@@ -1,12 +1,11 @@
 # test_cae.py
 import torch
 import torch.nn as nn
-import numpy as np
 import os
 import argparse
 import matplotlib.pyplot as plt
-from cae_models import ConvAutoEncoder
-from hrrp_dataset import HRRPDataset
+from models.cae_models import ConvAutoEncoder
+from utils.hrrp_dataset import HRRPDataset
 from torch.utils.data import DataLoader
 
 

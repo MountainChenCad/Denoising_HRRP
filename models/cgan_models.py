@@ -5,30 +5,30 @@ import torch.nn.functional as F
 
 class Generator(nn.Module):
     """
-    用于CGAN的生成器模型，将噪声HRRP数据生成为干净HRRP数据。
-    使用1D卷积进行更好的信号处理。
+    Generator model for CGAN, transforming noisy HRRP data into clean HRRP data.
+    Using 1D convolutions for better signal processing.
     """
 
     def __init__(self, input_dim=500, condition_dim=128, hidden_dim=128):
         """
-        参数:
-            input_dim (int): 输入噪声HRRP序列的维度
-            condition_dim (int): 条件向量的维度(身份+径向特征)
-            hidden_dim (int): 隐藏层的维度
+        Parameters:
+            input_dim (int): Dimension of input noisy HRRP sequence
+            condition_dim (int): Dimension of condition vector (identity+radial features)
+            hidden_dim (int): Dimension of hidden layers
         """
         super(Generator, self).__init__()
 
-        # 条件的嵌入层
+        # Embedding layer for condition
         self.condition_fc = nn.Linear(condition_dim, input_dim)
 
-        # 处理组合输入的卷积层
+        # Convolutional layers for processing combined input
         self.conv1 = nn.Conv1d(2, hidden_dim, kernel_size=5, stride=1, padding=2)
         self.conv2 = nn.Conv1d(hidden_dim, hidden_dim * 2, kernel_size=5, stride=1, padding=2)
         self.conv3 = nn.Conv1d(hidden_dim * 2, hidden_dim * 2, kernel_size=5, stride=1, padding=2)
         self.conv4 = nn.Conv1d(hidden_dim * 2, hidden_dim, kernel_size=5, stride=1, padding=2)
         self.conv5 = nn.Conv1d(hidden_dim, 1, kernel_size=5, stride=1, padding=2)
 
-        # 批归一化层
+        # Batch normalization layers
         self.bn1 = nn.BatchNorm1d(hidden_dim)
         self.bn2 = nn.BatchNorm1d(hidden_dim * 2)
         self.bn3 = nn.BatchNorm1d(hidden_dim * 2)
@@ -36,35 +36,35 @@ class Generator(nn.Module):
 
     def forward(self, x, condition):
         """
-        生成器的前向传播
+        Forward pass of the generator
 
-        参数:
-            x (torch.Tensor): 输入噪声HRRP序列，形状为 [batch_size, input_dim]
-            condition (torch.Tensor): 条件张量，形状为 [batch_size, condition_dim]
+        Parameters:
+            x (torch.Tensor): Input noisy HRRP sequence, shape [batch_size, input_dim]
+            condition (torch.Tensor): Condition tensor, shape [batch_size, condition_dim]
 
-        返回:
-            torch.Tensor: 生成的干净HRRP，形状为 [batch_size, input_dim]
+        Returns:
+            torch.Tensor: Generated clean HRRP, shape [batch_size, input_dim]
         """
         batch_size = x.size(0)
 
-        # 将输入重塑为 [batch_size, 1, input_dim] 用于1D卷积
+        # Reshape input to [batch_size, 1, input_dim] for 1D convolution
         x = x.unsqueeze(1)
 
-        # 处理条件并重塑为 [batch_size, 1, input_dim]
+        # Process condition and reshape to [batch_size, 1, input_dim]
         condition = self.condition_fc(condition)
         condition = condition.unsqueeze(1)
 
-        # 沿通道维度连接输入和条件
+        # Concatenate input and condition along channel dimension
         x = torch.cat([x, condition], dim=1)  # [batch_size, 2, input_dim]
 
-        # 应用带有批归一化和ReLU的卷积层
+        # Apply convolutional layers with batch normalization and ReLU
         x = F.relu(self.bn1(self.conv1(x)))
         x = F.relu(self.bn2(self.conv2(x)))
         x = F.relu(self.bn3(self.conv3(x)))
         x = F.relu(self.bn4(self.conv4(x)))
         x = torch.sigmoid(self.conv5(x))
 
-        # 将输出展平为 [batch_size, input_dim]
+        # Flatten output to [batch_size, input_dim]
         x = x.view(batch_size, -1)
 
         return x
@@ -72,69 +72,69 @@ class Generator(nn.Module):
 
 class Discriminator(nn.Module):
     """
-    用于CGAN的判别器模型，区分真实干净HRRP数据和生成的干净HRRP数据。
-    使用1D卷积进行更好的信号处理。
+    Discriminator model for CGAN, distinguishing between real clean HRRP data and generated clean HRRP data.
+    Using 1D convolutions for better signal processing.
     """
 
     def __init__(self, input_dim=500, condition_dim=128, hidden_dim=128):
         """
-        参数:
-            input_dim (int): 输入HRRP序列的维度(干净或生成的)
-            condition_dim (int): 条件向量的维度(身份+径向特征)
-            hidden_dim (int): 隐藏层的维度
+        Parameters:
+            input_dim (int): Dimension of input HRRP sequence (clean or generated)
+            condition_dim (int): Dimension of condition vector (identity+radial features)
+            hidden_dim (int): Dimension of hidden layers
         """
         super(Discriminator, self).__init__()
 
-        # 条件的嵌入层
+        # Embedding layer for condition
         self.condition_fc = nn.Linear(condition_dim, input_dim)
 
-        # 卷积层
+        # Convolutional layers
         self.conv1 = nn.Conv1d(2, hidden_dim, kernel_size=5, stride=2, padding=2)
         self.conv2 = nn.Conv1d(hidden_dim, hidden_dim * 2, kernel_size=5, stride=2, padding=2)
         self.conv3 = nn.Conv1d(hidden_dim * 2, hidden_dim * 4, kernel_size=5, stride=2, padding=2)
 
-        # 计算卷积后展平的大小
-        self.flattened_size = hidden_dim * 4 * ((input_dim + 7) // 8)  # 向上取整以处理不可整除的大小
+        # Calculate flattened size after convolutions
+        self.flattened_size = hidden_dim * 4 * ((input_dim + 7) // 8)  # Round up to handle non-divisible sizes
 
-        # 全连接层
+        # Fully connected layers
         self.fc1 = nn.Linear(self.flattened_size, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, 1)
 
-        # Leaky ReLU激活
+        # Leaky ReLU activation
         self.leaky_relu = nn.LeakyReLU(0.2)
 
     def forward(self, x, condition):
         """
-        判别器的前向传播
+        Forward pass of the discriminator
 
-        参数:
-            x (torch.Tensor): 输入HRRP序列(干净或生成的)，形状为 [batch_size, input_dim]
-            condition (torch.Tensor): 条件张量，形状为 [batch_size, condition_dim]
+        Parameters:
+            x (torch.Tensor): Input HRRP sequence (clean or generated), shape [batch_size, input_dim]
+            condition (torch.Tensor): Condition tensor, shape [batch_size, condition_dim]
 
-        返回:
-            torch.Tensor: 判别结果，形状为 [batch_size, 1]
+        Returns:
+            torch.Tensor: Discrimination result, shape [batch_size, 1]
         """
         batch_size = x.size(0)
 
-        # 将输入重塑为 [batch_size, 1, input_dim] 用于1D卷积
+        # Reshape input to [batch_size, 1, input_dim] for 1D convolution
         x = x.unsqueeze(1)
 
-        # 处理条件并重塑为 [batch_size, 1, input_dim]
+        # Process condition and reshape to [batch_size, 1, input_dim]
         condition = self.condition_fc(condition)
         condition = condition.unsqueeze(1)
 
-        # 沿通道维度连接输入和条件
+        # Concatenate input and condition along channel dimension
         x = torch.cat([x, condition], dim=1)  # [batch_size, 2, input_dim]
 
-        # 应用带有LeakyReLU的卷积层
+        # Apply convolutional layers with LeakyReLU
         x = self.leaky_relu(self.conv1(x))
         x = self.leaky_relu(self.conv2(x))
         x = self.leaky_relu(self.conv3(x))
 
-        # 展平
+        # Flatten
         x = x.view(batch_size, -1)
 
-        # 应用全连接层
+        # Apply fully connected layers
         x = self.leaky_relu(self.fc1(x))
         x = torch.sigmoid(self.fc2(x))
 
