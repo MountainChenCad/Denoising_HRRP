@@ -897,9 +897,9 @@ def main():
                         help='Directory to save trained models')
     parser.add_argument('--batch_size', type=int, default=64,
                         help='Batch size for training')
-    parser.add_argument('--epochs', type=int, default=200,
+    parser.add_argument('--epochs', type=int, default=500,
                         help='Number of training epochs')
-    parser.add_argument('--lr', type=float, default=0.0001,
+    parser.add_argument('--lr', type=float, default=0.00001,
                         help='Learning rate')
     parser.add_argument('--input_dim', type=int, default=500,
                         help='Dimension of input HRRP sequence')

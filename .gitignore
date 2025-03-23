@@ -4,3 +4,7 @@ test_wcgan_hrrp.py
 train_wcgan_hrrp.py
 /checkpoints
 /results
+/ablation_results
+ablation_cgan.py
+ablation_cgan.py
+analyze_ablation_results.py
