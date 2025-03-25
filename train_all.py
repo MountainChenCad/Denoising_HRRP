@@ -921,7 +921,7 @@ def main():
     # CGAN specific parameters
     parser.add_argument('--hidden_dim', type=int, default=128,
                         help='Dimension of hidden layers for CGAN and CAE')
-    parser.add_argument('--feature_extractors_dir', type=str, default='',
+    parser.add_argument('--feature_extractors_dir', type=str, default='checkpoints/feature_extractors',
                         help='Directory containing pre-trained feature extractors')
     parser.add_argument('--lr_feature_extractors', type=float, default=0.00001,
                         help='Learning rate for fine-tuning feature extractors')

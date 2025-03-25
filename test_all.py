@@ -1341,7 +1341,7 @@ def main():
                         help='Number of test samples to process')
     parser.add_argument('--input_dim', type=int, default=500,
                         help='Dimension of input HRRP sequence')
-    parser.add_argument('--psnr_levels', type=str, default='20,10,0',
+    parser.add_argument('--psnr_levels', type=str, default='20,10,5',
                         help='PSNR levels to test at (comma-separated values in dB)')
     parser.add_argument('--batch_size', type=int, default=64,
                         help='Batch size for evaluation')
