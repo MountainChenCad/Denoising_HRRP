@@ -909,7 +909,7 @@ def main():
                         help='Whether to save sample denoising results')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
-    parser.add_argument('--psnr_levels', type=str, default='20,10,0',
+    parser.add_argument('--psnr_levels', type=str, default='20,10,5',
                         help='PSNR levels to train at (comma-separated values in dB)')
 
     # Feature extractors parameters

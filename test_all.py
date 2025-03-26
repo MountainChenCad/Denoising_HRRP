@@ -249,7 +249,7 @@ def test_cgan(args, device, psnr_level, cnn_model=None):
             plt.grid(True, linestyle='--', alpha=0.3)
 
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, f'sample_{i + 1}_denoising.png'), dpi=300, bbox_inches='tight')
+            plt.savefig(os.path.join(output_dir, f'sample_{i + 1}_denoising.svg'), dpi=300, bbox_inches='tight')
             plt.close()
 
             # Update progress bar
@@ -502,7 +502,7 @@ def test_cae(args, device, psnr_level, cnn_model=None):
             plt.grid(True, linestyle='--', alpha=0.3)
 
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, f'sample_{i + 1}_denoising.png'), dpi=300, bbox_inches='tight')
+            plt.savefig(os.path.join(output_dir, f'sample_{i + 1}_denoising.svg'), dpi=300, bbox_inches='tight')
             plt.close()
 
             # Update progress bar
@@ -761,7 +761,7 @@ def test_msae(args, device, psnr_level, cnn_model=None):
             plt.grid(True, linestyle='--', alpha=0.3)
 
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, f'sample_{i + 1}_denoising.png'), dpi=300, bbox_inches='tight')
+            plt.savefig(os.path.join(output_dir, f'sample_{i + 1}_denoising.svg'), dpi=300, bbox_inches='tight')
             plt.close()
 
             # Update progress bar
@@ -918,7 +918,7 @@ def compare_methods(args, psnr_level, results):
                  f'+{height:.2f}dB', ha='center', va='bottom')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'psnr_improvement_comparison.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'psnr_improvement_comparison.svg'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # 2. SSIM Comparison plot
@@ -947,7 +947,7 @@ def compare_methods(args, psnr_level, results):
                  f'{height:.4f}', ha='center', va='bottom')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'ssim_comparison.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'ssim_comparison.svg'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # 3. MSE Comparison plot
@@ -972,7 +972,7 @@ def compare_methods(args, psnr_level, results):
                  f'{height:.6f}', ha='center', va='bottom')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'mse_comparison.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'mse_comparison.svg'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # 4. CNN Recognition Accuracy Comparison plot (if available)
@@ -998,7 +998,7 @@ def compare_methods(args, psnr_level, results):
                      f'{height:.2f}%', ha='center', va='bottom')
 
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'recognition_accuracy_comparison.png'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(output_dir, 'recognition_accuracy_comparison.svg'), dpi=300, bbox_inches='tight')
         plt.close()
 
         # 5. CNN Accuracy Improvement Comparison plot
@@ -1023,7 +1023,7 @@ def compare_methods(args, psnr_level, results):
                      f'+{height:.2f}%', ha='center', va='bottom')
 
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'recognition_improvement_comparison.png'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(output_dir, 'recognition_improvement_comparison.svg'), dpi=300, bbox_inches='tight')
         plt.close()
 
     # Write comparison report
@@ -1127,7 +1127,7 @@ def generate_psnr_comparison(args, all_results):
     ax.spines['right'].set_visible(False)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'psnr_improvement_vs_noise.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'psnr_improvement_vs_noise.svg'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # 2. SSIM vs. Noise Level
@@ -1161,7 +1161,7 @@ def generate_psnr_comparison(args, all_results):
     plt.ylim(ssim_min, 1.0)
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'ssim_vs_noise.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(output_dir, 'ssim_vs_noise.svg'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # 3. CNN Accuracy vs. Noise Level (if available)
@@ -1192,7 +1192,7 @@ def generate_psnr_comparison(args, all_results):
         ax.spines['right'].set_visible(False)
 
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'accuracy_vs_noise.png'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(output_dir, 'accuracy_vs_noise.svg'), dpi=300, bbox_inches='tight')
         plt.close()
 
         # 4. CNN Accuracy Improvement vs. Noise Level
@@ -1221,7 +1221,7 @@ def generate_psnr_comparison(args, all_results):
         ax.spines['right'].set_visible(False)
 
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'accuracy_improvement_vs_noise.png'), dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(output_dir, 'accuracy_improvement_vs_noise.svg'), dpi=300, bbox_inches='tight')
         plt.close()
 
     # Write summary report
@@ -1337,7 +1337,7 @@ def main():
                         help='Directory containing trained models')
     parser.add_argument('--output_dir', type=str, default='results',
                         help='Directory to save test results')
-    parser.add_argument('--num_samples', type=int, default=100,
+    parser.add_argument('--num_samples', type=int, default=300,
                         help='Number of test samples to process')
     parser.add_argument('--input_dim', type=int, default=500,
                         help='Dimension of input HRRP sequence')
