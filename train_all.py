@@ -43,7 +43,8 @@ def train_feature_extractors(args, device, psnr_level=None):
     os.makedirs(output_dir, exist_ok=True)
 
     # Create G_D model
-    G_D = TargetRadialLengthModule(input_dim=args.input_dim, feature_dim=args.feature_dim).to(device)
+    G_D = TargetRadialLengthModule(input_dim=args.input_dim, feature_dim=args.feature_dim,
+                                   dataset_type=args.dataset_type).to(device)
 
     # Define loss function and optimizer for G_D
     criterion_GD = nn.MSELoss()
@@ -58,7 +59,7 @@ def train_feature_extractors(args, device, psnr_level=None):
     optimizer_GI = optim.Adam(G_I.parameters(), lr=args.lr)
 
     # Load dataset
-    train_dataset = HRRPDataset(args.train_dir)
+    train_dataset = HRRPDataset(args.train_dir, dataset_type=args.dataset_type)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     # Update num_classes based on dataset
@@ -72,6 +73,7 @@ def train_feature_extractors(args, device, psnr_level=None):
 
     # Print some info about the dataset
     print(f"Training feature extractors with dataset from: {args.train_dir}")
+    print(f"Dataset type: {args.dataset_type}")
     print(f"Number of samples: {len(train_dataset)}")
     print(f"Number of classes: {args.num_classes}")
 
@@ -96,23 +98,32 @@ def train_feature_extractors(args, device, psnr_level=None):
             radial_length = radial_length.float().to(device)
             identity_labels = identity_labels.long().to(device)
 
-            # ======== Train G_D ========
-            optimizer_GD.zero_grad()
-            _, predicted_radial_length = G_D(data)
+            # ======== Train G_D if using simulated data ========
+            if args.dataset_type == 'simulated':
+                optimizer_GD.zero_grad()
+                _, predicted_radial_length = G_D(data)
 
-            # Skip samples with invalid radial length
-            valid_indices = ~torch.isnan(radial_length) & ~torch.isinf(radial_length) & (radial_length < 1e6)
-            if valid_indices.sum() > 0:
-                # Use only valid values to compute loss
-                gd_loss = criterion_GD(
-                    predicted_radial_length[valid_indices],
-                    radial_length[valid_indices]
-                )
+                # Skip samples with invalid radial length
+                valid_indices = ~torch.isnan(radial_length) & ~torch.isinf(radial_length) & (radial_length < 1e6)
+                if valid_indices.sum() > 0:
+                    # Use only valid values to compute loss
+                    gd_loss = criterion_GD(
+                        predicted_radial_length[valid_indices],
+                        radial_length[valid_indices]
+                    )
 
-                if not torch.isnan(gd_loss) and not torch.isinf(gd_loss) and gd_loss < 1e6:
-                    gd_loss.backward()
-                    optimizer_GD.step()
-                    epoch_gd_loss += gd_loss.item()
+                    if not torch.isnan(gd_loss) and not torch.isinf(gd_loss) and gd_loss < 1e6:
+                        gd_loss.backward()
+                        optimizer_GD.step()
+                        epoch_gd_loss += gd_loss.item()
+            else:
+                # For measured data, just pass data through G_D to extract features
+                # No training on radial length since it's not available
+                with torch.no_grad():
+                    _, _ = G_D(data)
+
+                # Set a placeholder loss value
+                gd_loss = torch.tensor(0.0)
 
             # ======== Train G_I ========
             optimizer_GI.zero_grad()
@@ -135,7 +146,11 @@ def train_feature_extractors(args, device, psnr_level=None):
             })
 
         # Calculate epoch metrics
-        epoch_gd_loss /= len(train_loader)
+        if args.dataset_type == 'simulated':
+            epoch_gd_loss /= len(train_loader)
+        else:
+            epoch_gd_loss = 0.0  # No G_D training for measured data
+
         epoch_gi_loss /= len(train_loader)
         epoch_gi_accuracy = 100 * correct / total
 
@@ -207,8 +222,16 @@ def train_cgan(args, device, psnr_level):
     output_dir = os.path.join(args.output_dir, f"cgan_psnr_{psnr_level}dB")
     os.makedirs(output_dir, exist_ok=True)
 
+    # Determine feature dimensions based on dataset type
+    condition_dim = args.feature_dim
+    if args.dataset_type == 'simulated':
+        condition_dim = args.feature_dim * 2  # Both G_D and G_I features
+    else:
+        condition_dim = args.feature_dim  # Only G_I features for measured data
+
     # Load feature extractors
-    G_D = TargetRadialLengthModule(input_dim=args.input_dim, feature_dim=args.feature_dim).to(device)
+    G_D = TargetRadialLengthModule(input_dim=args.input_dim, feature_dim=args.feature_dim,
+                                   dataset_type=args.dataset_type).to(device)
     G_I = TargetIdentityModule(input_dim=args.input_dim, feature_dim=args.feature_dim,
                                num_classes=args.num_classes).to(device)
 
@@ -219,12 +242,14 @@ def train_cgan(args, device, psnr_level):
 
     # Create CGAN models
     generator = Generator(input_dim=args.input_dim,
-                          condition_dim=args.feature_dim * 2,
-                          hidden_dim=args.hidden_dim).to(device)
+                          condition_dim=condition_dim,
+                          hidden_dim=args.hidden_dim,
+                          dataset_type=args.dataset_type).to(device)
 
     discriminator = Discriminator(input_dim=args.input_dim,
-                                  condition_dim=args.feature_dim * 2,
-                                  hidden_dim=args.hidden_dim).to(device)
+                                  condition_dim=condition_dim,
+                                  hidden_dim=args.hidden_dim,
+                                  dataset_type=args.dataset_type).to(device)
 
     # Define loss functions
     adversarial_loss = nn.BCELoss()
@@ -235,11 +260,15 @@ def train_cgan(args, device, psnr_level):
     # Define optimizers
     optimizer_G = optim.Adam(generator.parameters(), lr=args.lr, betas=(0.5, 0.999))
     optimizer_D = optim.Adam(discriminator.parameters(), lr=args.lr, betas=(0.5, 0.999))
-    optimizer_GD = optim.Adam(G_D.parameters(), lr=args.lr_feature_extractors, betas=(0.5, 0.999))
+
+    # Only create G_D optimizer for simulated data
+    if args.dataset_type == 'simulated':
+        optimizer_GD = optim.Adam(G_D.parameters(), lr=args.lr_feature_extractors, betas=(0.5, 0.999))
+
     optimizer_GI = optim.Adam(G_I.parameters(), lr=args.lr_feature_extractors, betas=(0.5, 0.999))
 
     # Load dataset
-    train_dataset = HRRPDataset(args.train_dir)
+    train_dataset = HRRPDataset(args.train_dir, dataset_type=args.dataset_type)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     # Update num_classes based on dataset
@@ -288,7 +317,12 @@ def train_cgan(args, device, psnr_level):
             with torch.no_grad():
                 f_D, _ = G_D(clean_data)
                 f_I, _ = G_I(clean_data)
-                condition = torch.cat([f_D, f_I], dim=1)
+
+                # Combine features based on dataset type
+                if args.dataset_type == 'simulated':
+                    condition = torch.cat([f_D, f_I], dim=1)
+                else:
+                    condition = f_I  # For measured data, only use identity features
 
             # ========================
             # 2. Train Discriminator
@@ -361,9 +395,9 @@ def train_cgan(args, device, psnr_level):
             optimizer_G.step()
 
             # ========================
-            # 4. Update G_D (optional)
+            # 4. Update G_D (optional, only for simulated data)
             # ========================
-            if args.update_feature_extractors:
+            if args.update_feature_extractors and args.dataset_type == 'simulated':
                 optimizer_GD.zero_grad()
 
                 # Predict radial length
@@ -384,9 +418,10 @@ def train_cgan(args, device, psnr_level):
                         optimizer_GD.step()
                         epoch_gd_loss += gd_loss.item()
 
-                # ========================
-                # 5. Update G_I (optional)
-                # ========================
+            # ========================
+            # 5. Update G_I (optional)
+            # ========================
+            if args.update_feature_extractors:
                 optimizer_GI.zero_grad()
 
                 # Predict identity
@@ -419,8 +454,16 @@ def train_cgan(args, device, psnr_level):
         epoch_d_loss /= len(train_loader)
         epoch_g_loss /= len(train_loader)
         epoch_rec_loss /= len(train_loader)
-        epoch_gd_loss /= len(train_loader)
-        epoch_gi_loss /= len(train_loader)
+
+        if args.dataset_type == 'simulated' and args.update_feature_extractors:
+            epoch_gd_loss /= len(train_loader)
+        else:
+            epoch_gd_loss = 0.0
+
+        if args.update_feature_extractors:
+            epoch_gi_loss /= len(train_loader)
+        else:
+            epoch_gi_loss = 0.0
 
         # Save losses for plotting
         d_losses.append(epoch_d_loss)
@@ -459,7 +502,12 @@ def train_cgan(args, device, psnr_level):
                     # Extract features
                     f_D, _ = G_D(sample_clean)
                     f_I, _ = G_I(sample_clean)
-                    sample_condition = torch.cat([f_D, f_I], dim=1)
+
+                    # Combine features based on dataset type
+                    if args.dataset_type == 'simulated':
+                        sample_condition = torch.cat([f_D, f_I], dim=1)
+                    else:
+                        sample_condition = f_I  # For measured data, only use identity features
 
                     # Generate denoised sample
                     sample_denoised = generator(sample_noisy, sample_condition)
@@ -517,13 +565,14 @@ def train_cgan(args, device, psnr_level):
     plt.grid(True)
 
     if args.update_feature_extractors:
-        plt.subplot(2, 2, 3)
-        plt.plot(gd_losses, label='G_D Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('G_D Loss')
-        plt.legend()
-        plt.grid(True)
+        if args.dataset_type == 'simulated':
+            plt.subplot(2, 2, 3)
+            plt.plot(gd_losses, label='G_D Loss')
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.title('G_D Loss')
+            plt.legend()
+            plt.grid(True)
 
         plt.subplot(2, 2, 4)
         plt.plot(gi_losses, label='G_I Loss')
@@ -569,11 +618,12 @@ def train_cae(args, device, psnr_level):
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
     # Load dataset
-    train_dataset = HRRPDataset(args.train_dir)
+    train_dataset = HRRPDataset(args.train_dir, dataset_type=args.dataset_type)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     # Print information about the dataset and model
     print(f"Training CAE with dataset from: {args.train_dir}")
+    print(f"Dataset type: {args.dataset_type}")
     print(f"Number of samples: {len(train_dataset)}")
 
     # Arrays for tracking loss
@@ -722,11 +772,12 @@ def train_msae(args, device, psnr_level):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     # Load dataset
-    train_dataset = HRRPDataset(args.train_dir)
+    train_dataset = HRRPDataset(args.train_dir, dataset_type=args.dataset_type)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     # Print information about the dataset and model
     print(f"Training MSAE with dataset from: {args.train_dir}")
+    print(f"Dataset type: {args.dataset_type}")
     print(f"Number of samples: {len(train_dataset)}")
     print(f"Sparsity parameter: {args.sparsity_param}, Beta: {args.sparsity_beta}")
 
@@ -891,7 +942,7 @@ def main():
     parser.add_argument('--model', type=str, default='all',
                         choices=['feature_extractors', 'cgan', 'cae', 'msae', 'all'],
                         help='Model to train')
-    parser.add_argument('--train_dir', type=str, default='datasets/simulated_3/train',
+    parser.add_argument('--train_dir', type=str, default='datasets/measured_3/train',
                         help='Directory containing training data')
     parser.add_argument('--output_dir', type=str, default='checkpoints',
                         help='Directory to save trained models')
@@ -909,8 +960,11 @@ def main():
                         help='Whether to save sample denoising results')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
-    parser.add_argument('--psnr_levels', type=str, default='20,10,5',
+    parser.add_argument('--psnr_levels', type=str, default='0',
                         help='PSNR levels to train at (comma-separated values in dB)')
+    parser.add_argument('--dataset_type', type=str, default='measured',
+                        choices=['simulated', 'measured'],
+                        help='Type of dataset to use (simulated or measured)')
 
     # Feature extractors parameters
     parser.add_argument('--feature_dim', type=int, default=64,
@@ -972,6 +1026,7 @@ def main():
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    print(f"Dataset type: {args.dataset_type}")
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)

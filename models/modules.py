@@ -7,15 +7,21 @@ class TargetRadialLengthModule(nn.Module):
     """
     G_D: Target Radial Length Module
     A simple 1-D CNN with three layers to extract target radial length information
+    Can operate in two modes:
+    1. For simulated data: Extracts and predicts radial length
+    2. For measured data: Acts as a feature extractor without radial length prediction
     """
 
-    def __init__(self, input_dim=500, feature_dim=64):
+    def __init__(self, input_dim=500, feature_dim=64, dataset_type='simulated'):
         """
         Args:
             input_dim (int): Dimension of input HRRP sequence
             feature_dim (int): Dimension of output feature
+            dataset_type (str): 'simulated' or 'measured' - affects module behavior
         """
         super(TargetRadialLengthModule, self).__init__()
+
+        self.dataset_type = dataset_type
 
         # Layer 1: Conv1d with ReLU activation
         self.conv1 = nn.Conv1d(1, 16, kernel_size=3, stride=1, padding=1)
@@ -38,7 +44,7 @@ class TargetRadialLengthModule(nn.Module):
 
         Returns:
             torch.Tensor: High-dimensional feature f_D with shape [batch_size, feature_dim]
-            torch.Tensor: Predicted radial length (for training)
+            torch.Tensor: Predicted radial length (for simulated data) or zeros (for measured data)
         """
         # Ensure the input is 2D [batch_size, input_dim]
         if len(x.shape) > 2:
@@ -59,8 +65,13 @@ class TargetRadialLengthModule(nn.Module):
         # Apply fully connected layer to get feature representation
         features = self.fc(x)
 
-        # Return both features and radial length prediction
-        radial_length = torch.mean(features, dim=1)  # Simple prediction mechanism
+        # Handle radial length prediction based on dataset type
+        if self.dataset_type == 'simulated':
+            # For simulated data, predict radial length
+            radial_length = torch.mean(features, dim=1)  # Simple prediction mechanism
+        else:
+            # For measured data, just return zeros as placeholder
+            radial_length = torch.zeros(x.size(0), device=x.device)
 
         return features, radial_length
 
@@ -69,6 +80,7 @@ class TargetIdentityModule(nn.Module):
     """
     G_I: Target Identity Module
     A simple 1-D CNN with four layers to extract target identity information
+    Works identically for both simulated and measured data
     """
 
     def __init__(self, input_dim=500, feature_dim=64, num_classes=3):

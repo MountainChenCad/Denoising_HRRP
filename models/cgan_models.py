@@ -7,19 +7,30 @@ class Generator(nn.Module):
     """
     Generator model for CGAN, transforming noisy HRRP data into clean HRRP data.
     Using 1D convolutions for better signal processing.
+    Supports both simulated data (with radial length features) and measured data (without).
     """
 
-    def __init__(self, input_dim=500, condition_dim=128, hidden_dim=128):
+    def __init__(self, input_dim=500, condition_dim=128, hidden_dim=128, dataset_type='simulated'):
         """
         Parameters:
             input_dim (int): Dimension of input noisy HRRP sequence
             condition_dim (int): Dimension of condition vector (identity+radial features)
             hidden_dim (int): Dimension of hidden layers
+            dataset_type (str): 'simulated' or 'measured' - affects conditioning mechanism
         """
         super(Generator, self).__init__()
 
+        self.dataset_type = dataset_type
+
+        # For measured data without radial length, we might have a smaller condition vector
+        effective_condition_dim = condition_dim
+        if dataset_type == 'measured':
+            # If we're not using radial length features, condition_dim might be halved
+            # This is handled by the caller - we just use whatever condition_dim is provided
+            pass
+
         # Embedding layer for condition
-        self.condition_fc = nn.Linear(condition_dim, input_dim)
+        self.condition_fc = nn.Linear(effective_condition_dim, input_dim)
 
         # Convolutional layers for processing combined input
         self.conv1 = nn.Conv1d(2, hidden_dim, kernel_size=5, stride=1, padding=2)
@@ -41,6 +52,8 @@ class Generator(nn.Module):
         Parameters:
             x (torch.Tensor): Input noisy HRRP sequence, shape [batch_size, input_dim]
             condition (torch.Tensor): Condition tensor, shape [batch_size, condition_dim]
+                For simulated data: Combined identity and radial length features
+                For measured data: Identity features only
 
         Returns:
             torch.Tensor: Generated clean HRRP, shape [batch_size, input_dim]
@@ -74,19 +87,30 @@ class Discriminator(nn.Module):
     """
     Discriminator model for CGAN, distinguishing between real clean HRRP data and generated clean HRRP data.
     Using 1D convolutions for better signal processing.
+    Supports both simulated data (with radial length features) and measured data (without).
     """
 
-    def __init__(self, input_dim=500, condition_dim=128, hidden_dim=128):
+    def __init__(self, input_dim=500, condition_dim=128, hidden_dim=128, dataset_type='simulated'):
         """
         Parameters:
             input_dim (int): Dimension of input HRRP sequence (clean or generated)
             condition_dim (int): Dimension of condition vector (identity+radial features)
             hidden_dim (int): Dimension of hidden layers
+            dataset_type (str): 'simulated' or 'measured' - affects conditioning mechanism
         """
         super(Discriminator, self).__init__()
 
+        self.dataset_type = dataset_type
+
+        # For measured data without radial length, we might have a smaller condition vector
+        effective_condition_dim = condition_dim
+        if dataset_type == 'measured':
+            # If we're not using radial length features, condition_dim might be halved
+            # This is handled by the caller - we just use whatever condition_dim is provided
+            pass
+
         # Embedding layer for condition
-        self.condition_fc = nn.Linear(condition_dim, input_dim)
+        self.condition_fc = nn.Linear(effective_condition_dim, input_dim)
 
         # Convolutional layers
         self.conv1 = nn.Conv1d(2, hidden_dim, kernel_size=5, stride=2, padding=2)
@@ -110,6 +134,8 @@ class Discriminator(nn.Module):
         Parameters:
             x (torch.Tensor): Input HRRP sequence (clean or generated), shape [batch_size, input_dim]
             condition (torch.Tensor): Condition tensor, shape [batch_size, condition_dim]
+                For simulated data: Combined identity and radial length features
+                For measured data: Identity features only
 
         Returns:
             torch.Tensor: Discrimination result, shape [batch_size, 1]

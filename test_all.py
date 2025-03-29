@@ -69,7 +69,7 @@ def load_or_train_cnn(args, device):
     os.makedirs(args.cnn_dir, exist_ok=True)
 
     # Load training dataset
-    train_dataset = HRRPDataset(args.train_dir)
+    train_dataset = HRRPDataset(args.train_dir, dataset_type=args.dataset_type)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 
     # Prepare validation set (20% of training data)
@@ -115,15 +115,24 @@ def test_cgan(args, device, psnr_level, cnn_model=None):
     output_dir = os.path.join(args.output_dir, f"cgan_psnr_{psnr_level}dB")
     os.makedirs(output_dir, exist_ok=True)
 
+    # Determine feature dimensions based on dataset type
+    condition_dim = args.feature_dim
+    if args.dataset_type == 'simulated':
+        condition_dim = args.feature_dim * 2  # Both G_D and G_I features
+    else:
+        condition_dim = args.feature_dim  # Only G_I features for measured data
+
     # Load feature extractors
-    G_D = TargetRadialLengthModule(input_dim=args.input_dim, feature_dim=args.feature_dim).to(device)
+    G_D = TargetRadialLengthModule(input_dim=args.input_dim, feature_dim=args.feature_dim,
+                                   dataset_type=args.dataset_type).to(device)
     G_I = TargetIdentityModule(input_dim=args.input_dim, feature_dim=args.feature_dim,
                                num_classes=args.num_classes).to(device)
 
     # Load generator
     generator = Generator(input_dim=args.input_dim,
-                          condition_dim=args.feature_dim * 2,
-                          hidden_dim=args.hidden_dim).to(device)
+                          condition_dim=condition_dim,
+                          hidden_dim=args.hidden_dim,
+                          dataset_type=args.dataset_type).to(device)
 
     # Load model weights
     cgan_dir = os.path.join(args.load_dir, f"cgan_psnr_{psnr_level}dB")
@@ -144,7 +153,7 @@ def test_cgan(args, device, psnr_level, cnn_model=None):
     generator.eval()
 
     # Load test dataset
-    test_dataset = HRRPDataset(args.test_dir)
+    test_dataset = HRRPDataset(args.test_dir, dataset_type=args.dataset_type)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
     # Evaluation metrics
@@ -179,10 +188,15 @@ def test_cgan(args, device, psnr_level, cnn_model=None):
             # Create noisy data at the target PSNR
             noisy_data, actual_psnr = add_noise_for_exact_psnr(clean_data, psnr_level)
 
-            # Extract features and create condition
+            # Extract features
             f_D, _ = G_D(clean_data)
             f_I, _ = G_I(clean_data)
-            condition = torch.cat([f_D, f_I], dim=1)
+
+            # Combine features based on dataset type
+            if args.dataset_type == 'simulated':
+                condition = torch.cat([f_D, f_I], dim=1)
+            else:
+                condition = f_I  # For measured data, only use identity features
 
             # Generate denoised data
             denoised_data = generator(noisy_data, condition)
@@ -333,6 +347,7 @@ def test_cgan(args, device, psnr_level, cnn_model=None):
     with open(os.path.join(output_dir, 'test_results.txt'), 'w') as f:
         f.write(f"CGAN Test Results for PSNR={psnr_level}dB\n")
         f.write(f"======================================\n\n")
+        f.write(f"Dataset type: {args.dataset_type}\n")
         f.write(f"Number of test samples: {n_samples}\n\n")
         f.write(f"Average Metrics:\n")
         f.write(f"  Noisy PSNR: {avg_noisy_psnr:.2f}dB\n")
@@ -402,7 +417,7 @@ def test_cae(args, device, psnr_level, cnn_model=None):
     model.eval()
 
     # Load test dataset
-    test_dataset = HRRPDataset(args.test_dir)
+    test_dataset = HRRPDataset(args.test_dir, dataset_type=args.dataset_type)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
     # Evaluation metrics
@@ -586,6 +601,7 @@ def test_cae(args, device, psnr_level, cnn_model=None):
     with open(os.path.join(output_dir, 'test_results.txt'), 'w') as f:
         f.write(f"CAE Test Results for PSNR={psnr_level}dB\n")
         f.write(f"====================================\n\n")
+        f.write(f"Dataset type: {args.dataset_type}\n")
         f.write(f"Number of test samples: {n_samples}\n\n")
         f.write(f"Average Metrics:\n")
         f.write(f"  Noisy PSNR: {avg_noisy_psnr:.2f}dB\n")
@@ -661,7 +677,7 @@ def test_msae(args, device, psnr_level, cnn_model=None):
     model.eval()
 
     # Load test dataset
-    test_dataset = HRRPDataset(args.test_dir)
+    test_dataset = HRRPDataset(args.test_dir, dataset_type=args.dataset_type)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
     # Evaluation metrics
@@ -845,6 +861,7 @@ def test_msae(args, device, psnr_level, cnn_model=None):
     with open(os.path.join(output_dir, 'test_results.txt'), 'w') as f:
         f.write(f"MSAE Test Results for PSNR={psnr_level}dB\n")
         f.write(f"====================================\n\n")
+        f.write(f"Dataset type: {args.dataset_type}\n")
         f.write(f"Number of test samples: {n_samples}\n\n")
         f.write(f"Average Metrics:\n")
         f.write(f"  Noisy PSNR: {avg_noisy_psnr:.2f}dB\n")
@@ -1030,6 +1047,7 @@ def compare_methods(args, psnr_level, results):
     with open(os.path.join(output_dir, 'comparison_results.txt'), 'w') as f:
         f.write(f"Denoising Methods Comparison at PSNR={psnr_level}dB\n")
         f.write(f"=================================================\n\n")
+        f.write(f"Dataset type: {args.dataset_type}\n\n")
 
         # Table header - include CNN metrics if available
         if all('denoised_accuracy' in results[method] for method in methods):
@@ -1228,6 +1246,7 @@ def generate_psnr_comparison(args, all_results):
     with open(os.path.join(output_dir, 'summary_results.txt'), 'w') as f:
         f.write(f"Denoising Methods Comparison Across PSNR Levels\n")
         f.write(f"==============================================\n\n")
+        f.write(f"Dataset type: {args.dataset_type}\n\n")
 
         # For each PSNR level
         for psnr in psnr_levels:
@@ -1329,9 +1348,9 @@ def main():
     parser.add_argument('--model', type=str, default='all',
                         choices=['cgan', 'cae', 'msae', 'all'],
                         help='Model to test')
-    parser.add_argument('--test_dir', type=str, default='datasets/simulated_3/test',
+    parser.add_argument('--test_dir', type=str, default='datasets/measured_3/test',
                         help='Directory containing test data')
-    parser.add_argument('--train_dir', type=str, default='datasets/simulated_3/train',
+    parser.add_argument('--train_dir', type=str, default='datasets/measured_3/train',
                         help='Directory containing training data (for CNN training)')
     parser.add_argument('--load_dir', type=str, default='checkpoints',
                         help='Directory containing trained models')
@@ -1345,6 +1364,9 @@ def main():
                         help='PSNR levels to test at (comma-separated values in dB)')
     parser.add_argument('--batch_size', type=int, default=64,
                         help='Batch size for evaluation')
+    parser.add_argument('--dataset_type', type=str, default='measured',
+                        choices=['simulated', 'measured'],
+                        help='Type of dataset to use (simulated or measured)')
 
     # Feature extractors parameters
     parser.add_argument('--feature_dim', type=int, default=64,
@@ -1392,6 +1414,7 @@ def main():
     # Set device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    print(f"Dataset type: {args.dataset_type}")
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
@@ -1450,5 +1473,4 @@ if __name__ == "__main__":
     elapsed_time = time.time() - start_time
     hours, remainder = divmod(elapsed_time, 3600)
     minutes, seconds = divmod(remainder, 60)
-    print(f"Total testing time: {int(hours)}h {int(minutes)}m {seconds:.2f}s")
     print(f"Total testing time: {int(hours)}h {int(minutes)}m {seconds:.2f}s")
